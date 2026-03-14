@@ -10,9 +10,10 @@
 
 ## User Stories (Backlog)
 
-Stories are ordered by priority. Stories 1–5 constitute the first version (MVP).
+Stories are ordered by priority. Stories 0–5 constitute the first version (MVP).
 
 ### MVP (First Version)
+**0. As a QA tester, I want to perform regression testing automatically by providing AI all testing data and context information.
 
 **1. Bug Report Input**
 As a QA tester, I want to describe a bug I found in plain text (what happened, where, what I was doing), so that the AI assistant has enough context to attempt reproduction.
@@ -37,14 +38,15 @@ As a QA tester, I want to export the generated bug report in common formats (Mar
 **7. Jira / Issue Tracker Integration**
 As a QA lead, I want generated bug reports to be pushed directly to our issue tracker (Jira, GitHub Issues, Linear), so that the report lands in the developer's workflow without copy-pasting.
 
-**8. Discord / Codecks Integration**
-As a QA tester at an indie studio, I want to send bug reports directly to our Discord channel or Codecks board, so that bugs reach the team where we actually communicate (not enterprise tools we don't use).
+**8. Reproduction Confidence Score**
+As a QA tester, I want to see a confidence score indicating how reliably the AI was able to reproduce the bug, so that I can decide whether to verify manually or trust the report as-is.
 
 **9. Bug Categorization**
 As a QA lead, I want the tool to automatically categorize bugs by type (collision, UI, state, performance, visual), so that I can prioritize and assign them to the right developer.
 
-**10. Reproduction Confidence Score**
-As a QA tester, I want to see a confidence score indicating how reliably the AI was able to reproduce the bug, so that I can decide whether to verify manually or trust the report as-is.
+**10. Discord / Codecks Integration**
+As a QA tester at an indie studio, I want to send bug reports directly to our Discord channel or Codecks board, so that bugs reach the team where we actually communicate (not enterprise tools we don't use).
+
 
 **11. Multi-Build Comparison**
 As a developer, I want to know if a bug is present in the current build only or also existed in previous builds, so that I can identify which change introduced the regression.
@@ -52,8 +54,8 @@ As a developer, I want to know if a bug is present in the current build only or 
 **12. Screenshot / Video Capture**
 As a developer, I want the bug report to include screenshots or short video clips of the reproduction, so that I can see the bug visually without running the game myself.
 
-**13. Batch Bug Processing**
-As a QA lead, I want to submit multiple bug reports at once and have the tool process them in queue, so that overnight or during breaks, reproduction work continues without manual input.
+**13. Custom Report Templates**
+As a QA lead, I want to customize the format and fields of generated bug reports to match our studio's internal template, so that reports fit our existing workflow.
 
 **14. Historical Bug Database**
 As a QA lead, I want to maintain a searchable history of all reproduced bugs and their reports, so that I can track patterns, avoid duplicates, and reference past issues.
@@ -61,8 +63,8 @@ As a QA lead, I want to maintain a searchable history of all reproduced bugs and
 **15. Team Workspace**
 As a QA lead, I want multiple team members to access the same project workspace, so that our QA team can collaborate without each person setting up the tool independently.
 
-**16. Custom Report Templates**
-As a QA lead, I want to customize the format and fields of generated bug reports to match our studio's internal template, so that reports fit our existing workflow.
+**16. Batch Bug Processing**
+As a QA lead, I want to submit multiple bug reports at once and have the tool process them in queue, so that overnight or during breaks, reproduction work continues without manual input.
 
 **17. Godot Engine Support**
 As a QA tester at a studio using Godot, I want the tool to support Godot projects, so that I can use it regardless of our engine choice.
@@ -74,12 +76,18 @@ As a QA tester, I want the tool to flag performance anomalies (frame drops, memo
 
 ## Functional Requirements
 
+- The system shall allow the AI assistant to retain contextual information about targeted fixes or new features during regression testing and use this context to evaluate whether the intended issues were resolved and whether any new regressions were introduced.
 - The system shall accept bug descriptions as free-text input from the QA tester.
 - The system shall connect to a Unity project build and interact with the game environment to attempt bug reproduction.
 - The system shall generate structured bug reports containing: reproduction steps, game state at time of bug, environment details (engine version, OS, device config), severity estimate, and reproduction success/failure status.
+- The system should execute automated tests in a controlled and repeatable environment so that identical builds and test conditions produce consistent results across multiple runs.
+- Each regression test execution shall run in an isolated environment where game state, save data, and configuration are reset between tests.
 - The system shall display a full trace of reproduction attempts to the QA tester for verification.
 - The system shall support exporting reports in Markdown and PDF formats.
 - The system shall provide a web-based dashboard for submitting bugs, viewing reproduction status, and accessing reports.
+- The system shall support testing across multiple game builds and maintain clear version tracking for all test executions and reports.
+- The system should break down each change or feature into individual, testable modules, starting with unit-level components and progressively integrating them. This approach ensures we can precisely identify which modules are working correctly and which are failing, enabling faster debugging and more reliable validation of the overall functionality
+- The system shall integrate with Unity via the MCP(https://github.com/mcp/coplaydev/unity-mcp) to enable the AI assistant to access game context and interact with Unity tools for automated testing and bug reproduction without requiring modifications to the Unity project.
 
 ## Non-Functional Requirements
 
