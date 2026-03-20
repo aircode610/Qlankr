@@ -1,0 +1,81 @@
+# ── Environment ──────────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+.env.staging
+
+# ── Build artifacts (shared) ─────────────────────────────────────────────────
+dist/
+build/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+venv/
+.venv/
+env/
+ENV/
+virtualenv/
+.Python
+.python-version
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+htmlcov/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pyre/
+.pytype/
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+.vite/
+.cache/
+.next/
+.nuxt/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Runtime artifacts ─────────────────────────────────────────────────────────
+*.log
+logs/
+*.db
+*.sqlite*
+screenshots/
+recordings/
+test-data/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Linux ─────────────────────────────────────────────────────────────────────
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ── Windows ───────────────────────────────────────────────────────────────────
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
