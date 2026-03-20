@@ -299,3 +299,88 @@ python -m agent.agent "https://github.com/owner/repo/pull/42"
 
 - Large PRs (100+ files): agent still runs but notes lower confidence in output
 - Agent trace persistence: in-memory only, not saved
+
+---
+
+## Calibration Repos
+
+Four open-source game repos to use for evaluating and calibrating the agent. Together they cover flat vs. structured directories, three languages, PR volumes from ~6K to ~50K, and different labeling systems that serve as ground truth for checking agent output.
+
+---
+
+### 1. Cataclysm: Dark Days Ahead
+
+**Repo:** https://github.com/CleverRaven/Cataclysm-DDA
+**Language:** C++ / JSON
+**Merged PRs:** ~50,000+
+**Source files:** ~700 C++ files (flat `src/`) + thousands of JSON content files
+
+**Why it's useful.** The largest PR dataset of any game repo on GitHub. Every PR uses a structured template and a bot auto-labels them with subsystem tags (`Map / Mapgen`, `Vehicles`, `Monsters`, `Items`, etc.) — this auto-labeling is built-in ground truth to check the agent's component classification against. The key challenge: `src/` is completely flat with no subdirectories, so the agent cannot rely on directory structure and must infer components semantically from file names and content.
+
+**Evaluation ideas**
+- **Semantic component detection:** pick a PR labeled `Vehicles` by the bot, run the agent, check if it identifies the vehicle system without directory cues
+- **Data-vs-code distinction:** ~30–50% of PRs are JSON-only content changes (new items, recipes). Check that the agent correctly identifies these as low-risk data additions vs. code changes
+- **Scale stress test:** compare agent output on a 2-file JSON PR vs. a 50+ file C++ refactor — does confidence scoring and depth of analysis scale appropriately?
+- **Label accuracy benchmark:** run 10 labeled PRs, score how often the agent's component list matches the bot's ground-truth tags
+
+---
+
+### 2. OpenTTD
+
+**Repo:** https://github.com/OpenTTD/OpenTTD
+**Language:** C++
+**Merged PRs:** ~5,500–6,000
+**Source files:** ~1,500–2,000, organized into clear subsystem directories
+
+**Why it's useful.** The most disciplined PR conventions of the four. Every commit uses structured prefixes (`Fix:`, `Feature:`, `Add:`, `Codechange:`) and PR templates include checklists for savegame format changes, Script API changes, and translation impact — metadata that directly names affected subsystems. The `src/` directory is well-organized into distinct folders (network, AI, video, audio, pathfinding, GUI, economy), making it ideal for testing whether the agent correctly maps files to components when directory structure is clear.
+
+**Evaluation ideas**
+- **Directory-to-component mapping:** pick a PR that touches `src/network/` and `src/saveload/` — does the agent correctly identify both the network subsystem and savegame compatibility as affected?
+- **Commit prefix vs. agent classification:** for `Fix:` PRs, check the agent marks risk as localized; for `Feature:` PRs, check it flags broader regression risk
+- **Cross-subsystem detection:** find PRs that touch the GUI and an underlying game system — does the agent flag both layers or just the surface change?
+- **Precision baseline:** because PR quality is highest here, use OpenTTD as the precision benchmark — results on this repo should be most reliable
+
+---
+
+### 3. osu!
+
+**Repo:** https://github.com/ppy/osu
+**Language:** C#
+**Merged PRs:** ~12,000–14,000
+**Source files:** ~5,000–7,000 across separate .NET projects
+
+**Why it's useful.** Every PR gets two labels: a **size label** (XS, S, M, L, XL by file count) and **area labels** (`area:gameplay`, `area:editor`, `area:ui`, `ruleset/osu!`, etc.). This dual-axis labeling is the best ground truth of the four for checking both scope and component accuracy. The .NET solution structure creates hard subsystem boundaries — each ruleset and game area is a separate project — which tests whether the agent understands project-level architecture.
+
+**Evaluation ideas**
+- **Size-based calibration:** run one PR from each size tier (XS through XL), plot how agent confidence, step count, and output depth change with PR size — this directly tells you how the agent scales
+- **Area label accuracy:** score how often the agent's components match the area labels; `ruleset/osu!` vs. `ruleset/mania` distinctions test fine-grained component resolution
+- **Cross-ruleset impact:** find PRs that change `osu.Game` (core) — does the agent flag that all four rulesets may be affected even if only core files changed?
+- **Language diversity check:** since osu! is C#, run the same PR types as C++ repos and compare agent behavior — does it reason differently about .NET project references vs. C++ `#include`s?
+
+---
+
+### 4. Luanti (formerly Minetest)
+
+**Repo:** https://github.com/luanti-org/luanti
+**Language:** C++ / Lua
+**Merged PRs:** ~7,000–7,500
+**Source files:** ~2,500–3,000 across well-named subsystem directories
+
+**Why it's useful.** The most balanced repo of the four — non-trivial size without overwhelming volume, clear directory structure (`src/client/`, `src/network/`, `src/mapgen/`, `src/script/`, `builtin/`), and two-dimensional PR labels (area tags + type tags). Its dual-language architecture (C++ engine + Lua scripting layer) creates a natural cross-layer impact pattern: a gameplay change may touch Lua scripts in `builtin/`, C++ API bindings in `src/script/`, and rendering code in `src/client/` — exactly the kind of chain the agent needs to detect.
+
+**Evaluation ideas**
+- **Cross-layer impact detection:** find PRs that touch both `src/script/` (C++ Lua bindings) and `builtin/` (Lua game logic) — does the agent identify the full chain from engine to script layer?
+- **Type label vs. risk assessment:** for `Bugfix 🐛` PRs, check the agent produces narrower test suggestions than for `Feature ✨` PRs of the same file count
+- **Balanced baseline:** use Luanti as the default demo repo — it's approachable enough that reviewers can sanity-check agent output without deep game knowledge
+- **Rendering vs. logic separation:** find a client rendering PR (`src/client/`) and a server logic PR (`src/server*.cpp`) of similar size — does the agent correctly identify them as non-overlapping components?
+
+---
+
+### Summary
+
+| | Cataclysm-DDA | OpenTTD | osu! | Luanti |
+|---|---|---|---|---|
+| **Primary test** | Semantic component detection (flat dirs) | Precision baseline (structured dirs) | Size calibration (XS–XL labels) | Cross-layer impact (C++ + Lua) |
+| **Ground truth** | Bot auto-labels | Commit prefix + PR checklist | Size + area labels | Area + type labels |
+| **Volume** | Stress (~50K PRs) | Focused (~6K PRs) | Medium (~13K PRs) | Balanced (~7K PRs) |
+| **Language** | C++ / JSON | C++ | C# | C++ / Lua |
