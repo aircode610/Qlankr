@@ -1,3 +1,70 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* App-level dark gradient background with subtle animation. */
+.app-bg {
+  background:
+    radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.14), transparent 32%),
+    radial-gradient(circle at 85% 20%, rgba(129, 140, 248, 0.14), transparent 30%),
+    linear-gradient(135deg, #020617 0%, #0f172a 45%, #111827 100%);
+}
+
+/* Glass look used by the top panel for a "fresh" style without harming readability. */
+.glass-panel {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+/* Floating decorative orbs; pointer-events none keeps UI interactions normal. */
+.orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(28px);
+  opacity: 0.45;
+  pointer-events: none;
+  animation: floaty 9s ease-in-out infinite;
+}
+
+.orb-one {
+  width: 220px;
+  height: 220px;
+  left: -40px;
+  top: 45px;
+  background: rgba(34, 211, 238, 0.35);
+}
+
+.orb-two {
+  width: 260px;
+  height: 260px;
+  right: -80px;
+  top: 160px;
+  background: rgba(99, 102, 241, 0.35);
+  animation-delay: -3s;
+}
+
+.pulse-soft {
+  animation: pulseSoft 1.8s ease-in-out infinite;
+}
+
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0px) translateX(0px);
+  }
+  50% {
+    transform: translateY(-12px) translateX(8px);
+  }
+}
+
+@keyframes pulseSoft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
