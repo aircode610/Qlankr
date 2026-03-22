@@ -85,9 +85,8 @@ class GraphData(BaseModel):
     clusters: list[GraphCluster]
 
 
-class ResultEvent(BaseModel):
+class ResultEvent(AnalyzeResponse):
     type: Literal["result"] = "result"
-    data: AnalyzeResponse
 
 
 # Request models

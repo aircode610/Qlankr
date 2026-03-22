@@ -21,7 +21,8 @@ app.add_middleware(
 # SSE helpers
 
 def sse_event(data: BaseModel) -> str:
-    return f"data: {data.model_dump_json()}\n\n"
+    event_type = getattr(data, "type", "message")
+    return f"event: {event_type}\ndata: {data.model_dump_json()}\n\n"
 
 
 async def stream_response(generator: AsyncIterator[BaseModel]) -> AsyncIterator[str]:
