@@ -3,12 +3,13 @@ FROM python:3.12-slim
 # Install Node.js for GitHub MCP server (runs as subprocess via stdio transport)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    git \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-install GitHub MCP server so it doesn't need network access at runtime
-RUN npm install -g @modelcontextprotocol/server-github
+# Pre-install GitHub MCP server and gitnexus
+RUN npm install -g @modelcontextprotocol/server-github gitnexus
 
 WORKDIR /app
 
