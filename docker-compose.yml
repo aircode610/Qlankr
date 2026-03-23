@@ -8,6 +8,14 @@ services:
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
+      - LANGSMITH_TRACING=true
+      - LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com
+      - LANGSMITH_PROJECT=qlankr
+      - LANGCHAIN_TRACING_V2=true
+      - LANGCHAIN_API_KEY=${LANGSMITH_API_KEY}
+      - LANGCHAIN_ENDPOINT=https://eu.api.smith.langchain.com
+      - LANGCHAIN_PROJECT=qlankr
 
   frontend:
     build: ./frontend
