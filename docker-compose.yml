@@ -27,3 +27,18 @@ services:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     depends_on:
       - backend
+
+  backend-test:
+    build: ./backend
+    profiles: [test]
+    command: python3 -m pytest --tb=short -q
+    env_file:
+      - .env
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+
+  frontend-test:
+    build: ./frontend
+    profiles: [test]
+    command: npm test
