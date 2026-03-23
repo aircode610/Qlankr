@@ -26,10 +26,10 @@ def _server_config() -> dict:
 
 def get_mcp_client() -> MultiServerMCPClient:
     """
-    Returns a MultiServerMCPClient context manager.
+    Returns a MultiServerMCPClient instance.
 
     Usage:
-        async with get_mcp_client() as client:
-            tools = await client.get_tools()
+        client = get_mcp_client()
+        tools = await client.get_tools()
     """
     return MultiServerMCPClient(_server_config())

@@ -4,11 +4,20 @@ from typing import AsyncIterator
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
-from models import AgentStepEvent, AnalyzeResponse, ErrorEvent, ResultEvent
+from models import (
+    AffectedComponent,
+    AgentStepEvent,
+    AnalyzeResponse,
+    ErrorEvent,
+    ResultEvent,
+    TestSuggestions,
+)
 
 MAX_TOOL_CALLS = 25
 BUDGET_WARNING_AT = 20
@@ -16,6 +25,35 @@ TIMEOUT_SECONDS = 180
 
 _llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, max_tokens=4096)
 
+
+# ── Submit tool schema ────────────────────────────────────────────────────────
+# Mirrors AnalyzeResponse but without agent_steps (we track that ourselves).
+# Claude calls this tool as its final action — the input IS the structured output.
+
+class _AnalysisResult(BaseModel):
+    pr_title: str
+    pr_url: str
+    pr_summary: str
+    affected_components: list[AffectedComponent]
+
+
+def _make_submit_tool() -> StructuredTool:
+    def submit_analysis(**kwargs) -> str:
+        return "Analysis submitted."
+
+    return StructuredTool.from_function(
+        func=submit_analysis,
+        name="submit_analysis",
+        description=(
+            "Submit the completed QA impact analysis. "
+            "Call this exactly once when your analysis is complete. "
+            "This is your ONLY way to return the final result."
+        ),
+        args_schema=_AnalysisResult,
+    )
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 async def run_agent(
     pr_url: str,
@@ -38,19 +76,21 @@ async def run_agent(
 async def _run_agent_inner(
     pr_url: str,
 ) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
-    async with get_mcp_client() as client:
-        tools = await client.get_tools()
+    client = get_mcp_client()
+    mcp_tools = await client.get_tools()
+
+    submit_tool = _make_submit_tool()
+    all_tools = mcp_tools + [submit_tool]
 
     agent = create_react_agent(
         model=_llm,
-        tools=tools,
+        tools=all_tools,
         prompt=SystemMessage(content=SYSTEM_PROMPT),
-        response_format=AnalyzeResponse,
     )
 
     tool_call_count = 0
     budget_warning_sent = False
-    structured_response: AnalyzeResponse | None = None
+    analysis_result: _AnalysisResult | None = None
 
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}")]},
@@ -60,38 +100,41 @@ async def _run_agent_inner(
         etype = event["event"]
 
         if etype == "on_tool_start":
-            tool_call_count += 1
             tool_name = event["name"]
             tool_input = event["data"].get("input", {})
+
+            if tool_name == "submit_analysis":
+                # Capture the structured result — don't emit as a trace step
+                try:
+                    analysis_result = _AnalysisResult.model_validate(tool_input)
+                except Exception:
+                    pass
+                break
+
+            tool_call_count += 1
             yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
 
             if tool_call_count >= BUDGET_WARNING_AT and not budget_warning_sent:
                 budget_warning_sent = True
-                # The system prompt already instructs the agent to synthesize near the budget.
-                # Mid-stream injection is not possible with astream_events; this is logged only.
 
             if tool_call_count >= MAX_TOOL_CALLS:
                 break
 
-        elif etype == "on_chain_end" and event.get("name") == "LangGraph":
-            output = event["data"].get("output", {})
-            raw = output.get("structured_response")
-            if raw is not None:
-                if isinstance(raw, AnalyzeResponse):
-                    structured_response = raw
-                elif isinstance(raw, dict):
-                    try:
-                        structured_response = AnalyzeResponse.model_validate(raw)
-                    except Exception:
-                        pass
-
-    if structured_response is None:
-        yield ErrorEvent(message="Agent produced no structured output.")
+    if analysis_result is None:
+        yield ErrorEvent(message="Agent did not submit an analysis result.")
         return
 
-    structured_response.agent_steps = tool_call_count
-    yield ResultEvent(**structured_response.model_dump())
+    response = AnalyzeResponse(
+        pr_title=analysis_result.pr_title,
+        pr_url=analysis_result.pr_url,
+        pr_summary=analysis_result.pr_summary,
+        affected_components=analysis_result.affected_components,
+        agent_steps=tool_call_count,
+    )
+    yield ResultEvent(**response.model_dump())
 
+
+# ── Tool summary builders ─────────────────────────────────────────────────────
 
 def _tool_summary(tool_name: str, tool_input: dict) -> str:
     """Maps tool name + input to a human-readable summary for the AgentTrace panel."""
@@ -123,6 +166,8 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
     except Exception:
         return f"Calling tool: {tool_name}"
 
+
+# ── Standalone runner ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

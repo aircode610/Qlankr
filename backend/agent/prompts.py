@@ -56,7 +56,8 @@ When you have enough context:
 - Group affected files into logical components (by subsystem, cluster, or functional area)
 - Assess risks per component based on what you found in the graph and diffs
 - Write concrete, actionable test suggestions — not generic advice
-- Produce the final structured output and stop
+- Call submit_analysis with the completed report. This is your ONLY way to return results.
+  Do NOT write the result as text — you MUST call submit_analysis.
 
 ## Budget
 
