@@ -1,4 +1,5 @@
 import asyncio
+import re
 import sys
 from typing import AsyncIterator
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
+from indexer import get_repo_name
 from models import (
     AffectedComponent,
     AgentStepEvent,
@@ -73,6 +75,12 @@ async def run_agent(
         yield ErrorEvent(message=f"Unexpected error during analysis: {exc}")
 
 
+def _extract_owner_repo(pr_url: str) -> tuple[str, str] | None:
+    """Extract owner/repo from a GitHub PR URL."""
+    m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/", pr_url)
+    return (m.group(1), m.group(2)) if m else None
+
+
 async def _run_agent_inner(
     pr_url: str,
 ) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
@@ -88,12 +96,32 @@ async def _run_agent_inner(
         prompt=SystemMessage(content=SYSTEM_PROMPT),
     )
 
+    # Build initial message with repo context for GitNexus tool calls
+    owner_repo = _extract_owner_repo(pr_url)
+    repo_name: str | None = None
+    if owner_repo:
+        repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
+
+    if repo_name:
+        repo_context = (
+            f"\nThe repo '{repo_name}' is indexed in GitNexus."
+            f"\n- Pass repo=\"{repo_name}\" to every GitNexus tool call."
+            f"\n- GitNexus uses RELATIVE file paths (relative to the repo root)."
+            f"\n  Use the path exactly as it appears in the GitHub diff."
+            f"\n  Example: target=\"backend/agent/agent.py\" (no leading slash, no tmp path)"
+        )
+    else:
+        repo_context = (
+            "\nNote: no indexed repo found for this PR — use GitHub tools only and set all confidence to 'low'."
+        )
+    initial_message = f"Analyze this pull request: {pr_url}{repo_context}"
+
     tool_call_count = 0
     budget_warning_sent = False
     analysis_result: _AnalysisResult | None = None
 
     async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}")]},
+        {"messages": [HumanMessage(content=initial_message)]},
         version="v2",
         config={"recursion_limit": 60},
     ):
@@ -104,20 +132,25 @@ async def _run_agent_inner(
             tool_input = event["data"].get("input", {})
 
             if tool_name == "submit_analysis":
-                # Capture the structured result — don't emit as a trace step
+                import json as _json
+                print(f"[agent] submit_analysis keys: {list(tool_input.keys())}", flush=True)
+                print(f"[agent] submit_analysis input: {_json.dumps(tool_input, default=str)[:2000]}", flush=True)
                 try:
                     analysis_result = _AnalysisResult.model_validate(tool_input)
-                except Exception:
-                    pass
+                    print(f"[agent] submit_analysis captured ok", flush=True)
+                except Exception as e:
+                    print(f"[agent] submit_analysis parse error: {e}", flush=True)
                 break
 
             tool_call_count += 1
+            print(f"[agent] tool_call #{tool_call_count}: {tool_name}", flush=True)
             yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
 
             if tool_call_count >= BUDGET_WARNING_AT and not budget_warning_sent:
                 budget_warning_sent = True
 
             if tool_call_count >= MAX_TOOL_CALLS:
+                print(f"[agent] budget exhausted ({MAX_TOOL_CALLS}), breaking", flush=True)
                 break
 
     if analysis_result is None:
