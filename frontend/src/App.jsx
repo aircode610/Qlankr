@@ -26,7 +26,7 @@ const MOCK_GRAPH = {
   ],
 }
 
-function extractOwnerRepo(repoUrl) {
+export function extractOwnerRepo(repoUrl) {
   try {
     const parsed = new URL(repoUrl)
     const parts = parsed.pathname.split("/").filter(Boolean)
@@ -37,7 +37,7 @@ function extractOwnerRepo(repoUrl) {
   }
 }
 
-function buildMarkdownReport(result) {
+export function buildMarkdownReport(result) {
   if (!result) return ""
   const lines = [
     `# PR Impact Analysis`,
