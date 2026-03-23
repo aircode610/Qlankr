@@ -18,11 +18,9 @@ from models import (
     AnalyzeResponse,
     ErrorEvent,
     ResultEvent,
-    TestSuggestions,
 )
 
 MAX_TOOL_CALLS = 25
-BUDGET_WARNING_AT = 20
 TIMEOUT_SECONDS = 180
 
 _llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, max_tokens=4096)
@@ -76,7 +74,6 @@ async def run_agent(
 
 
 def _extract_owner_repo(pr_url: str) -> tuple[str, str] | None:
-    """Extract owner/repo from a GitHub PR URL."""
     m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/", pr_url)
     return (m.group(1), m.group(2)) if m else None
 
@@ -87,16 +84,12 @@ async def _run_agent_inner(
     client = get_mcp_client()
     mcp_tools = await client.get_tools()
 
-    submit_tool = _make_submit_tool()
-    all_tools = mcp_tools + [submit_tool]
-
     agent = create_react_agent(
         model=_llm,
-        tools=all_tools,
+        tools=mcp_tools + [_make_submit_tool()],
         prompt=SystemMessage(content=SYSTEM_PROMPT),
     )
 
-    # Build initial message with repo context for GitNexus tool calls
     owner_repo = _extract_owner_repo(pr_url)
     repo_name: str | None = None
     if owner_repo:
@@ -105,66 +98,52 @@ async def _run_agent_inner(
     if repo_name:
         repo_context = (
             f"\nThe repo '{repo_name}' is indexed in GitNexus."
-            f"\n- Pass repo=\"{repo_name}\" to every GitNexus tool call."
-            f"\n- GitNexus uses RELATIVE file paths (relative to the repo root)."
-            f"\n  Use the path exactly as it appears in the GitHub diff."
-            f"\n  Example: target=\"backend/agent/agent.py\" (no leading slash, no tmp path)"
+            f"\nPass repo=\"{repo_name}\" to every GitNexus tool call."
         )
     else:
         repo_context = (
-            "\nNote: no indexed repo found for this PR — use GitHub tools only and set all confidence to 'low'."
+            "\nNo indexed repo found for this PR — use GitHub tools only "
+            "and set all confidence to 'low'."
         )
-    initial_message = f"Analyze this pull request: {pr_url}{repo_context}"
 
     tool_call_count = 0
-    budget_warning_sent = False
     analysis_result: _AnalysisResult | None = None
 
     async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=initial_message)]},
+        {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}{repo_context}")]},
         version="v2",
         config={"recursion_limit": 60},
     ):
-        etype = event["event"]
+        if event["event"] != "on_tool_start":
+            continue
 
-        if etype == "on_tool_start":
-            tool_name = event["name"]
-            tool_input = event["data"].get("input", {})
+        tool_name = event["name"]
+        tool_input = event["data"].get("input", {})
 
-            if tool_name == "submit_analysis":
-                import json as _json
-                print(f"[agent] submit_analysis keys: {list(tool_input.keys())}", flush=True)
-                print(f"[agent] submit_analysis input: {_json.dumps(tool_input, default=str)[:2000]}", flush=True)
-                try:
-                    analysis_result = _AnalysisResult.model_validate(tool_input)
-                    print(f"[agent] submit_analysis captured ok", flush=True)
-                except Exception as e:
-                    print(f"[agent] submit_analysis parse error: {e}", flush=True)
-                break
+        if tool_name == "submit_analysis":
+            try:
+                analysis_result = _AnalysisResult.model_validate(tool_input)
+            except Exception as e:
+                yield ErrorEvent(message=f"submit_analysis validation failed: {e}")
+            break
 
-            tool_call_count += 1
-            print(f"[agent] tool_call #{tool_call_count}: {tool_name}", flush=True)
-            yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
+        tool_call_count += 1
+        yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
 
-            if tool_call_count >= BUDGET_WARNING_AT and not budget_warning_sent:
-                budget_warning_sent = True
-
-            if tool_call_count >= MAX_TOOL_CALLS:
-                print(f"[agent] budget exhausted ({MAX_TOOL_CALLS}), breaking", flush=True)
-                break
+        if tool_call_count >= MAX_TOOL_CALLS:
+            break
 
     if analysis_result is None:
         yield ErrorEvent(message="Agent did not submit an analysis result.")
         return
 
-    response = AnalyzeResponse(
+    yield ResultEvent(**AnalyzeResponse(
         pr_title=analysis_result.pr_title,
         pr_url=analysis_result.pr_url,
         pr_summary=analysis_result.pr_summary,
         affected_components=analysis_result.affected_components,
         agent_steps=tool_call_count,
-    )
-    yield ResultEvent(**response.model_dump())
+    ).model_dump())
 
 
 # ── Tool summary builders ─────────────────────────────────────────────────────
@@ -172,23 +151,15 @@ async def _run_agent_inner(
 def _tool_summary(tool_name: str, tool_input: dict) -> str:
     """Maps tool name + input to a human-readable summary for the AgentTrace panel."""
     builders = {
-        "get_pull_request": lambda i: (
-            f"Reading PR from {i.get('owner', '')}/{i.get('repo', '')}"
-        ),
-        "get_pull_request_files": lambda i: (
-            f"Fetching diffs for PR #{i.get('pull_number', '')}"
-        ),
+        "get_pull_request": lambda i: f"Reading PR from {i.get('owner', '')}/{i.get('repo', '')}",
+        "get_pull_request_files": lambda i: f"Fetching diffs for PR #{i.get('pull_number', '')}",
         "get_pull_request_comments": lambda _: "Reading PR comments",
-        "get_file_contents": lambda i: (
-            f"Reading file: {i.get('path', i.get('file_path', ''))}"
-        ),
+        "get_file_contents": lambda i: f"Reading file: {i.get('path', i.get('file_path', ''))}",
         "list_directory": lambda i: f"Listing directory: {i.get('path', '')}",
         "get_commits": lambda _: "Fetching recent commits",
         "search_code": lambda i: f"Searching code: {i.get('query', '')}",
         "detect_changes": lambda _: "Detecting changed symbols in knowledge graph",
-        "impact": lambda i: (
-            f"Checking blast radius: {i.get('target', i.get('file', ''))}"
-        ),
+        "impact": lambda i: f"Checking blast radius: {i.get('target', i.get('file', ''))}",
         "context": lambda i: f"Getting caller/callee context for: {i.get('name', '')}",
         "query": lambda i: f"Semantic search: {i.get('query', '')}",
         "cypher": lambda i: f"Graph query: {str(i.get('query', ''))[:60]}",
