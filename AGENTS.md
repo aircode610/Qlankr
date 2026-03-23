@@ -26,8 +26,7 @@ Qlankr/
 │   ├── agent/
 │   │   ├── agent.py                   # LangGraph structured ReAct agent, run_agent() entry point
 │   │   ├── tools.py                   # GitHub MCP + GitNexus MCP client setup, tool definitions
-│   │   ├── prompts.py                 # System prompt (versioned with comments) — enforces 3-phase structure
-│   │   └── output_parser.py           # Extracts and validates JSON from agent's final message
+│   │   └── prompts.py                 # System prompt (versioned) — environment-orientation approach
 │   └── requirements.txt
 ├── frontend/                          # React + Vite (JavaScript, not TypeScript)
 │   ├── src/
@@ -72,8 +71,8 @@ Qlankr/
 ## Key Architectural Decisions
 
 - **Two-phase workflow.** Phase 1 (repo indexing): user connects a repo once — backend clones it, runs `gitnexus analyze`, builds a knowledge graph, and stores it in a local registry. Phase 2 (PR analysis): agent uses both GitHub MCP tools and GitNexus MCP tools to analyze the PR against the indexed graph.
-- **GitNexus is a local code intelligence engine.** No code leaves the machine. Available MCP tools: `impact` (blast radius from changed files), `query` (semantic search over the graph), `context` (node context), `detect_changes` (semantic diff between commits), `cypher` (raw graph queries). See https://github.com/abhigyanpatwari/gitnexus.
-- **Agent is a structured ReAct loop, not a plain free-roaming loop.** The system prompt enforces three explicit phases: (1) **Blast radius** — always start with `detect_changes` + `impact` + PR diff; (2) **Depth analysis** — use `context`, `cypher`, and GitHub file reads only where GitNexus context is ambiguous; (3) **Synthesis** — produce the JSON output and hard-stop. A max-steps budget (30 tool calls) forces synthesis with a lower confidence score if exhausted.
+- **GitNexus is a local code intelligence engine.** No code leaves the machine. Available MCP tools: `impact` (symbol blast radius — takes a **symbol name**, not a file path), `query` (semantic search, param is `query`), `context` (caller/callee for a symbol), `cypher` (raw Cypher against the KuzuDB graph), `list_repos`. `detect_changes` uses local git diff only — not useful for remote PRs. See https://github.com/abhigyanpatwari/gitnexus.
+- **Agent is a ReAct loop oriented around its environment, not rigid phases.** The system prompt describes the three resources available (PR via GitHub MCP, knowledge graph via GitNexus MCP, repo name) and the goal (QA impact report). The agent decides its own tool call sequence. Budget is 25 tool calls; it must call `submit_analysis` as its final action — that is its only way to return a result.
 - **Fully autonomous — no human-in-the-loop.** All agent tools are read-only. The output is a structured report, not an action. Latency matters (QA tester is waiting). The cost of a wrong analysis is a missed test case, not an irreversible system action.
 - **No custom GitHub client.** The AI agent calls GitHub directly through the GitHub MCP server. Do not write wrapper functions that fetch from the GitHub API — let the agent use MCP tools.
 - **Streaming via SSE.** The backend streams agent events to the frontend in real time (`agent_step`, `result`, `error`). The frontend opens an SSE connection and renders each event as it arrives.
@@ -83,13 +82,19 @@ Qlankr/
 
 ## Agent Overview
 
-The impact analysis agent is a LangGraph structured ReAct loop. Entry point is `run_agent(pr_url)` in `backend/agent/agent.py`. It:
-1. Receives a GitHub PR URL
-2. **Phase 1 — Blast radius:** Calls `detect_changes` + `impact` + GitHub PR diff to map which graph nodes and files are affected
-3. **Phase 2 — Depth analysis:** Uses `context`, `cypher`, and targeted GitHub file reads to assess risk severity and test surface for each impacted node
-4. **Phase 3 — Synthesis:** Outputs a structured JSON impact report and stops (hard limit: 30 tool calls)
+The impact analysis agent is a LangGraph ReAct loop. Entry point is `run_agent(pr_url)` in `backend/agent/agent.py`. It:
+1. Receives a GitHub PR URL and (if indexed) the GitNexus repo name
+2. Freely uses GitHub MCP tools to read the PR diff, files, and comments
+3. Uses GitNexus MCP tools to assess blast radius and call graph impact for changed symbols
+4. Calls `submit_analysis` exactly once when done — this is the only way to return a result (hard limit: 25 tool calls)
 
-Both GitHub MCP tools and GitNexus MCP tools (`impact`, `query`, `context`, `detect_changes`, `cypher`) are available to the agent.
+Key constraints for GitNexus tools:
+- `impact` and `context` take a **symbol name** (function/class), NOT a file path
+- To resolve a file path to symbol names: `MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES' AND f.filePath='<path>' RETURN s.name LIMIT 20`
+- All graph edges are `[:CodeRelation]` with a `type` property — filter with `WHERE r.type='...'`
+- `detect_changes` uses local git diff only — skip it for remote GitHub PRs
+
+Both GitHub MCP tools and GitNexus MCP tools are available. If the repo is not indexed, the agent falls back to GitHub tools only and sets all confidence to "low".
 
 See `specs/01-impact-analysis-on-pr/spec.md` for the full output schema and SSE event format.
 
@@ -110,6 +115,14 @@ Response: JSON with nodes, edges, clusters for Sigma.js visualization
 POST /analyze
 Body: { "pr_url": "https://github.com/owner/repo/pull/42" }
 Response: SSE stream of agent_step / result / error events
+```
+
+Debug endpoints (dev only):
+
+```
+GET  /debug/mcp/tools           # List all MCP tools visible to the backend
+GET  /debug/mcp/repos           # Call list_repos and return raw response
+POST /debug/mcp/call            # Call any MCP tool: { "tool": "<name>", "args": {...} }
 ```
 
 Full contract (request shape, SSE event shapes, response JSON schema) is in `specs/01-impact-analysis-on-pr/spec.md`.
@@ -153,6 +166,7 @@ python -m agent.agent "https://github.com/owner/repo/pull/42"
 | Customer validation interview | `specs/interview-game-studio.md` |
 | Product proposal and market context | `docs/proposal.md` |
 | Pydantic models | `backend/models.py` |
-| Agent system prompt | `backend/agent/prompts.py` |
+| Agent system prompt (v1.3) | `backend/agent/prompts.py` |
 | SSE event types | `specs/01-impact-analysis-on-pr/spec.md` → API Contract section |
-| GitNexus MCP tools reference | `backend/agent/tools.py` |
+| GitNexus MCP client setup | `backend/agent/tools.py` |
+| Debug MCP endpoints | `GET /debug/mcp/tools`, `GET /debug/mcp/repos`, `POST /debug/mcp/call` |
