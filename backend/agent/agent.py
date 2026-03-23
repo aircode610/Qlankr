@@ -169,17 +169,3 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         return builder(tool_input) if builder else f"Calling tool: {tool_name}"
     except Exception:
         return f"Calling tool: {tool_name}"
-
-
-# ── Standalone runner ─────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m agent.agent <pr_url>")
-        sys.exit(1)
-
-    async def _main() -> None:
-        async for event in run_agent(sys.argv[1]):
-            print(event.model_dump_json(indent=2))
-
-    asyncio.run(_main())
