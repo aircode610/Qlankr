@@ -88,7 +88,7 @@ async def test_index_repo_successful_flow_events():
         return gitnexus_proc
 
     with patch("asyncio.create_subprocess_exec", mock_exec):
-        with patch("indexer._read_graph_data", return_value=mock_graph):
+        with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
             events = await collect(index_repo("https://github.com/owner/myrepo"))
 
     assert any(isinstance(e, IndexStepEvent) for e in events)
@@ -110,7 +110,7 @@ async def test_index_repo_successful_flow_event_order():
         return gitnexus_proc
 
     with patch("asyncio.create_subprocess_exec", mock_exec):
-        with patch("indexer._read_graph_data", return_value=mock_graph):
+        with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
             events = await collect(index_repo("https://github.com/owner/repo"))
 
     # IndexDoneEvent must come last
@@ -128,7 +128,7 @@ async def test_index_repo_populates_registry():
         return gitnexus_proc
 
     with patch("asyncio.create_subprocess_exec", mock_exec):
-        with patch("indexer._read_graph_data", return_value=mock_graph):
+        with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
             await collect(index_repo("https://github.com/owner/myrepo"))
 
     assert "owner/myrepo" in indexer._registry
@@ -149,22 +149,22 @@ async def test_get_graph_data_cached_graph():
         edges=[],
         clusters=[GraphCluster(id="c", label="C", size=1)],
     )
-    indexer._registry["owner/repo"] = {"path": "/fake", "graph": cached}
+    indexer._registry["owner/repo"] = {"path": "/fake", "repo_name": "repo", "graph": cached}
 
     result = await get_graph_data("owner", "repo")
     assert len(result.nodes) == 1
     assert result.nodes[0].id == "n1"
 
 
-async def test_get_graph_data_lazy_read(tmp_path):
+async def test_get_graph_data_lazy_read():
     mock_graph = GraphData(
         nodes=[GraphNode(id="n2", label="g.py", type="file", cluster="c")],
         edges=[],
         clusters=[],
     )
-    indexer._registry["owner/repo2"] = {"path": str(tmp_path), "graph": None}
+    indexer._registry["owner/repo2"] = {"path": "/fake", "repo_name": "repo2", "graph": None}
 
-    with patch("indexer._read_graph_data", return_value=mock_graph):
+    with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
         result = await get_graph_data("owner", "repo2")
 
     assert len(result.nodes) == 1

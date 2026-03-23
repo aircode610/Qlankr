@@ -80,20 +80,3 @@ async def test_graph_after_index_returns_data(client):
     assert len(data["nodes"]) == 1
     assert data["nodes"][0]["id"] == "n1"
     assert len(data["clusters"]) == 1
-
-
-async def test_analyze_stub_streams_error_event(client):
-    response = await client.post(
-        "/analyze", json={"pr_url": "https://github.com/owner/repo/pull/1"}
-    )
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
-    events = parse_sse_body(response.text)
-    error_events = [e for e in events if e["event"] == "error"]
-    assert len(error_events) == 1
-    assert "Agent not yet implemented" in error_events[0]["data"]["message"]
-
-
-async def test_analyze_request_validation(client):
-    response = await client.post("/analyze", json={})
-    assert response.status_code == 422

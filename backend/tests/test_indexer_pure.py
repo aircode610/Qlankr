@@ -1,8 +1,13 @@
-import json
-
 import pytest
 
-from indexer import _detect_stage, _parse_owner_repo, _read_graph_data
+from indexer import (
+    _detect_stage,
+    _parse_markdown_table,
+    _parse_owner_repo,
+    _split_row,
+    _to_records,
+    _unwrap_text,
+)
 
 
 # --- _parse_owner_repo ---
@@ -55,95 +60,134 @@ def test_detect_stage_unknown_defaults_to_analyze():
     assert _detect_stage("foobar xyzzy 12345") == "analyze"
 
 
-# --- _read_graph_data ---
+# --- _split_row ---
 
-def test_read_graph_data_no_dir(tmp_path):
-    result = _read_graph_data(str(tmp_path))
-    assert result.nodes == []
-    assert result.edges == []
-    assert result.clusters == []
+def test_split_row_three_columns():
+    assert _split_row("| a | b | c |") == ["a", "b", "c"]
 
 
-def test_read_graph_data_unified_graph_json(tmp_path):
-    gn_dir = tmp_path / ".gitnexus"
-    gn_dir.mkdir()
-    data = {
-        "nodes": [{"id": "n1", "label": "file.py", "type": "file", "cluster": "auth"}],
-        "edges": [{"source": "n1", "target": "n2", "type": "CALLS"}],
-        "clusters": [{"id": "auth", "label": "Auth", "size": 1}],
-    }
-    (gn_dir / "graph.json").write_text(json.dumps(data))
-
-    result = _read_graph_data(str(tmp_path))
-
-    assert len(result.nodes) == 1
-    assert result.nodes[0].id == "n1"
-    assert result.nodes[0].type == "file"
-    assert len(result.edges) == 1
-    assert result.edges[0].type == "CALLS"
-    assert len(result.clusters) == 1
-    assert result.clusters[0].id == "auth"
+def test_split_row_single_column():
+    assert _split_row("| single |") == ["single"]
 
 
-def test_read_graph_data_invalid_node_type_coercion(tmp_path):
-    gn_dir = tmp_path / ".gitnexus"
-    gn_dir.mkdir()
-    data = {
-        "nodes": [{"id": "n1", "label": "x", "type": "unknown", "cluster": "c"}],
-        "edges": [],
-        "clusters": [],
-    }
-    (gn_dir / "graph.json").write_text(json.dumps(data))
-
-    result = _read_graph_data(str(tmp_path))
-    assert result.nodes[0].type == "file"  # coerced from "unknown"
+def test_split_row_separator_row():
+    assert _split_row("| --- | --- |") == ["---", "---"]
 
 
-def test_read_graph_data_invalid_edge_type_coercion(tmp_path):
-    gn_dir = tmp_path / ".gitnexus"
-    gn_dir.mkdir()
-    data = {
-        "nodes": [],
-        "edges": [{"source": "a", "target": "b", "type": "CONTAINS"}],
-        "clusters": [],
-    }
-    (gn_dir / "graph.json").write_text(json.dumps(data))
-
-    result = _read_graph_data(str(tmp_path))
-    assert result.edges[0].type == "CALLS"  # coerced from "CONTAINS"
+def test_split_row_no_leading_pipe():
+    assert _split_row("a | b | c") == []
 
 
-def test_read_graph_data_fallback_split_files(tmp_path):
-    gn_dir = tmp_path / ".gitnexus"
-    gn_dir.mkdir()
-    (gn_dir / "clusters.json").write_text(
-        json.dumps([{"id": "auth", "label": "Auth", "size": 2}])
-    )
-    (gn_dir / "nodes.json").write_text(
-        json.dumps([{"id": "n1", "label": "f.py", "type": "file", "cluster": "auth"}])
-    )
-    (gn_dir / "edges.json").write_text(
-        json.dumps([{"source": "n1", "target": "n2", "type": "IMPORTS"}])
-    )
-
-    result = _read_graph_data(str(tmp_path))
-
-    assert len(result.clusters) == 1
-    assert len(result.nodes) == 1
-    assert len(result.edges) == 1
-    assert result.edges[0].type == "IMPORTS"
+def test_split_row_strips_whitespace():
+    assert _split_row("|  foo  |  bar  |") == ["foo", "bar"]
 
 
-def test_read_graph_data_partial_split_files(tmp_path):
-    gn_dir = tmp_path / ".gitnexus"
-    gn_dir.mkdir()
-    (gn_dir / "clusters.json").write_text(
-        json.dumps([{"id": "auth", "label": "Auth", "size": 2}])
-    )
-    # No nodes.json, no edges.json
+# --- _unwrap_text ---
 
-    result = _read_graph_data(str(tmp_path))
+def test_unwrap_text_plain_string():
+    assert _unwrap_text("hello") == "hello"
 
-    assert len(result.clusters) == 1
-    assert result.nodes == []
-    assert result.edges == []
+
+def test_unwrap_text_object_with_content():
+    class Msg:
+        content = "from content attr"
+    assert _unwrap_text(Msg()) == "from content attr"
+
+
+def test_unwrap_text_list_of_text_blocks():
+    blocks = [{"type": "text", "text": "part1"}, {"type": "text", "text": "part2"}]
+    assert _unwrap_text(blocks) == "part1\npart2"
+
+
+def test_unwrap_text_list_skips_non_text_blocks():
+    blocks = [{"type": "image", "url": "x"}, {"type": "text", "text": "ok"}]
+    assert _unwrap_text(blocks) == "ok"
+
+
+def test_unwrap_text_non_string_returns_empty():
+    assert _unwrap_text(42) == ""
+
+
+def test_unwrap_text_empty_string():
+    assert _unwrap_text("") == ""
+
+
+# --- _to_records ---
+
+def test_to_records_empty_string():
+    assert _to_records("") == []
+
+
+def test_to_records_json_array():
+    import json
+    data = [{"id": "a", "val": 1}, {"id": "b", "val": 2}]
+    assert _to_records(json.dumps(data)) == data
+
+
+def test_to_records_json_dict():
+    import json
+    data = {"key": "value"}
+    assert _to_records(json.dumps(data)) == [data]
+
+
+def test_to_records_json_with_markdown_key():
+    import json
+    md = "| name |\n| --- |\n| alice |"
+    assert _to_records(json.dumps({"markdown": md})) == [{"name": "alice"}]
+
+
+def test_to_records_raw_markdown_table():
+    md = "| col1 | col2 |\n| --- | --- |\n| x | y |"
+    result = _to_records(md)
+    assert result == [{"col1": "x", "col2": "y"}]
+
+
+def test_to_records_strips_prose_footer():
+    import json
+    data = [{"id": "a"}]
+    text = json.dumps(data) + "\n---\n**Next:** do something"
+    assert _to_records(text) == data
+
+
+def test_to_records_filters_non_dict_items():
+    import json
+    # list containing a non-dict element
+    assert _to_records(json.dumps([{"a": 1}, "not a dict", 42])) == [{"a": 1}]
+
+
+# --- _parse_markdown_table ---
+
+def test_parse_markdown_table_basic():
+    md = "| name | value |\n| --- | --- |\n| foo | bar |"
+    assert _parse_markdown_table(md) == [{"name": "foo", "value": "bar"}]
+
+
+def test_parse_markdown_table_multiple_rows():
+    md = "| x |\n| --- |\n| 1 |\n| 2 |"
+    result = _parse_markdown_table(md)
+    assert len(result) == 2
+    # JSON-parseable cells are decoded (1 → int)
+    assert result[0] == {"x": 1}
+    assert result[1] == {"x": 2}
+
+
+def test_parse_markdown_table_json_cell_value():
+    import json
+    node = {"id": "File:foo.py", "name": "foo.py"}
+    md = f"| f |\n| --- |\n| {json.dumps(node)} |"
+    result = _parse_markdown_table(md)
+    assert result == [{"f": node}]
+
+
+def test_parse_markdown_table_skips_wrong_column_count():
+    md = "| a | b |\n| --- | --- |\n| only_one |\n| x | y |"
+    result = _parse_markdown_table(md)
+    assert result == [{"a": "x", "b": "y"}]
+
+
+def test_parse_markdown_table_empty_string():
+    assert _parse_markdown_table("") == []
+
+
+def test_parse_markdown_table_only_header():
+    assert _parse_markdown_table("| a | b |") == []
