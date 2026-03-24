@@ -2,69 +2,75 @@
 @tailwind components;
 @tailwind utilities;
 
-/* App-level dark gradient background with subtle animation. */
-.app-bg {
-  background:
-    radial-gradient(circle at 10% 15%, rgba(56, 189, 248, 0.14), transparent 32%),
-    radial-gradient(circle at 85% 20%, rgba(129, 140, 248, 0.14), transparent 30%),
-    linear-gradient(135deg, #020617 0%, #0f172a 45%, #111827 100%);
+/* ═══════════════════════════════════════════════════════════════
+   BASE
+═══════════════════════════════════════════════════════════════ */
+html, body, #root {
+  height: 100%;
 }
 
-/* Glass look used by the top panel for a "fresh" style without harming readability. */
-.glass-panel {
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  border-radius: 0.75rem;
-  background: rgba(15, 23, 42, 0.55);
-  backdrop-filter: blur(8px);
+body {
+  background-color: #06060a;
+  color: #e4e4ed;
+  font-family: 'Outfit', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Floating decorative orbs; pointer-events none keeps UI interactions normal. */
-.orb {
-  position: absolute;
-  border-radius: 9999px;
-  filter: blur(28px);
-  opacity: 0.45;
-  pointer-events: none;
-  animation: floaty 9s ease-in-out infinite;
+/* ═══════════════════════════════════════════════════════════════
+   SIGMA.JS CANVAS
+═══════════════════════════════════════════════════════════════ */
+.sigma-container {
+  width: 100%;
+  height: 100%;
+}
+.sigma-container canvas {
+  outline: none;
 }
 
-.orb-one {
-  width: 220px;
-  height: 220px;
-  left: -40px;
-  top: 45px;
-  background: rgba(34, 211, 238, 0.35);
+/* ═══════════════════════════════════════════════════════════════
+   CUSTOM SCROLLBAR
+═══════════════════════════════════════════════════════════════ */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #2a2a3a #0a0a10;
+}
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: #0a0a10;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #2a2a3a;
+  border-radius: 3px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #5a5a70;
 }
 
-.orb-two {
-  width: 260px;
-  height: 260px;
-  right: -80px;
-  top: 160px;
-  background: rgba(99, 102, 241, 0.35);
-  animation-delay: -3s;
+/* ═══════════════════════════════════════════════════════════════
+   ANIMATIONS
+═══════════════════════════════════════════════════════════════ */
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes breathe {
+  0%, 100% { border-color: #2a2a3a; box-shadow: 0 0 0 0 rgba(124,58,237,0.3); }
+  50%       { border-color: #7c3aed; box-shadow: 0 0 30px 6px rgba(124,58,237,0.25); }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.5; }
 }
 
-.pulse-soft {
-  animation: pulseSoft 1.8s ease-in-out infinite;
-}
-
-@keyframes floaty {
-  0%,
-  100% {
-    transform: translateY(0px) translateX(0px);
-  }
-  50% {
-    transform: translateY(-12px) translateX(8px);
-  }
-}
-
-@keyframes pulseSoft {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.55;
-  }
-}
+.animate-slide-up  { animation: slide-up 0.3s cubic-bezier(0.4,0,0.2,1); }
+.animate-fade-in   { animation: fade-in 0.25s ease-out; }
+.animate-breathe   { animation: breathe 3s ease-in-out infinite; }
+.pulse-soft        { animation: pulse-soft 1.8s ease-in-out infinite; }

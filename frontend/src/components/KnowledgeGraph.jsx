@@ -1,630 +1,477 @@
 /**
- * KnowledgeGraph — mock-friendly renderer with optional Sigma.js upgrade path.
+ * KnowledgeGraph — Sigma.js WebGL renderer with ForceAtlas2 layout.
  *
- * Scope modes:
- * - "all": full graph; selected cluster is emphasized (dim others).
- * - "selected": only nodes/edges belonging to the chosen cluster (if any).
- *
- * Graph viewport: pan (drag), zoom (wheel), scroll container; selecting a cluster
- * fits/zooms the view to that group. See specs for intended node/edge types.
+ * Inspired by GitNexus's GraphCanvas design:
+ * - Dark void background
+ * - Purple accent for cluster nodes
+ * - Per-cluster color coding for file nodes
+ * - Interactive: click cluster pills to filter, zoom controls, hover tooltips
+ * - ForceAtlas2 physics layout for natural cluster grouping
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import Graph from "graphology"
+import Sigma from "sigma"
+import forceAtlas2 from "graphology-layout-forceatlas2"
+import { circular } from "graphology-layout"
+import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react"
+
+// Color palette for clusters (file nodes inherit their cluster's color)
+const CLUSTER_NODE_COLOR = "#7c3aed"  // accent purple for cluster hub nodes
+const CLUSTER_PALETTE = [
+  "#3b82f6", // blue
+  "#10b981", // emerald
+  "#f59e0b", // amber
+  "#ec4899", // pink
+  "#14b8a6", // teal
+  "#6366f1", // indigo
+  "#ef4444", // red
+  "#8b5cf6", // violet
+  "#f97316", // orange
+  "#06b6d4", // cyan
+]
+
+function dimHex(hex, alpha = 0.2) {
+  return hex + Math.round(alpha * 255).toString(16).padStart(2, "0")
+}
 
 export default function KnowledgeGraph({ graphData }) {
-  const [activeClusterId, setActiveClusterId] = useState(null)
-  const [viewMode, setViewMode] = useState("graph")
-  /** "all" = show everything + highlight selection; "selected" = filter to active cluster when set */
-  const [scopeMode, setScopeMode] = useState("all")
-  /** "overview" = cluster labels + file dots (less clutter); "full" = file labels on canvas */
-  const [graphDensity, setGraphDensity] = useState("overview")
+  const containerRef = useRef(null)
+  const sigmaRef = useRef(null)
+  const graphRef = useRef(null)
+  const activeClusterRef = useRef(null)
 
-  const sectionRef = useRef(null)
-  const graphViewportRef = useRef(null)
-  const clusterAnchorRefs = useRef({})
-  const viewBoxRef = useRef({ x: 0, y: 0, w: 1000, h: 380 })
-  const dragPanRef = useRef(null)
+  const [activeCluster, setActiveCluster] = useState(null)
+  const [hoveredNode, setHoveredNode] = useState(null) // { label, x, y }
+  const [stats, setStats] = useState({ nodes: 0, edges: 0, clusters: 0 })
+  const [viewMode, setViewMode] = useState("graph") // "graph" | "list"
 
   const nodes = graphData?.nodes || []
   const edges = graphData?.edges || []
   const clusters = graphData?.clusters || []
 
-  const filterToClusterOnly = scopeMode === "selected" && activeClusterId
+  // Stable color map: cluster id → color
+  const clusterColorMap = useMemo(() => {
+    const map = {}
+    clusters.forEach((c, i) => {
+      map[c.id] = CLUSTER_PALETTE[i % CLUSTER_PALETTE.length]
+    })
+    return map
+  }, [clusters])
 
-  const visibleNodes = useMemo(() => {
-    if (!filterToClusterOnly) return nodes
-    return nodes.filter((node) => node.cluster === activeClusterId)
-  }, [nodes, activeClusterId, filterToClusterOnly])
+  // Build and render graph whenever data changes
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || viewMode !== "graph") return
 
-  const visibleNodeIds = useMemo(() => {
-    return new Set(visibleNodes.map((node) => node.id))
-  }, [visibleNodes])
+    // Destroy previous instance
+    if (sigmaRef.current) {
+      sigmaRef.current.kill()
+      sigmaRef.current = null
+    }
 
-  const visibleEdges = useMemo(() => {
-    if (!filterToClusterOnly) return edges
-    return edges.filter(
-      (edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target),
-    )
-  }, [edges, visibleNodeIds, filterToClusterOnly])
+    if (!nodes.length) return
 
-  const highlightedNodeIds = useMemo(() => {
-    if (!activeClusterId || filterToClusterOnly) return new Set()
-    const match = clusters.find((c) => c.id === activeClusterId)
-    if (!match) return new Set()
-    return new Set(
-      nodes.filter((node) => node.cluster === match.id).map((node) => node.id),
-    )
-  }, [activeClusterId, clusters, nodes, filterToClusterOnly])
+    const graph = new Graph({ multi: false, type: "directed" })
+    graphRef.current = graph
 
-  const isNodeEmphasized = (nodeId, clusterId) => {
-    if (!activeClusterId) return true
-    if (filterToClusterOnly) return true
-    return clusterId === activeClusterId || highlightedNodeIds.has(nodeId)
-  }
+    // Add nodes
+    for (const node of nodes) {
+      const isCluster = node.type === "cluster"
+      const color = isCluster
+        ? CLUSTER_NODE_COLOR
+        : (clusterColorMap[node.cluster] || CLUSTER_PALETTE[0])
+      graph.addNode(node.id, {
+        label: node.label,
+        size: isCluster ? 16 : 5,
+        color,
+        borderColor: isCluster ? "#a78bfa" : color,
+        nodeType: node.type,
+        cluster: node.cluster,
+        x: Math.random() * 100,
+        y: Math.random() * 100,
+      })
+    }
 
-  const positionedNodes = useMemo(() => {
-    const width = 1000
-    const height = scopeMode === "selected" && activeClusterId ? 340 : 380
-    const sourceNodes = visibleNodes
-    const sourceEdges = visibleEdges
-
-    const filesByCluster = new Map()
-    for (const cluster of clusters) filesByCluster.set(cluster.id, [])
-    for (const node of sourceNodes) {
-      if (node.type === "file" && filesByCluster.has(node.cluster)) {
-        filesByCluster.get(node.cluster).push(node)
+    // Add edges (skip duplicates and self-loops)
+    for (const edge of edges) {
+      if (edge.source === edge.target) continue
+      if (!graph.hasNode(edge.source) || !graph.hasNode(edge.target)) continue
+      try {
+        graph.addEdge(edge.source, edge.target, {
+          size: 1.2,
+          color: "rgba(124,58,237,0.22)",
+          edgeType: edge.type,
+        })
+      } catch {
+        // skip duplicate edges
       }
     }
 
-    const renderedClusters = filterToClusterOnly
-      ? clusters.filter((c) => c.id === activeClusterId)
-      : clusters
-
-    const clusterPositions = new Map()
-    const total = Math.max(1, renderedClusters.length)
-    renderedClusters.forEach((cluster, i) => {
-      const cx = ((i + 1) * width) / (total + 1)
-      clusterPositions.set(cluster.id, { x: cx, y: 100, node: cluster })
+    // Layout: circular seed then ForceAtlas2
+    circular.assign(graph)
+    forceAtlas2.assign(graph, {
+      iterations: 150,
+      settings: {
+        gravity: 1.5,
+        scalingRatio: 8,
+        strongGravityMode: false,
+        barnesHutOptimize: graph.order > 100,
+        barnesHutTheta: 0.5,
+        adjustSizes: true,
+      },
     })
 
-    const coordinates = new Map()
-    for (const cluster of renderedClusters) {
-      const cp = clusterPositions.get(cluster.id)
-      coordinates.set(`${cluster.id}__cluster`, {
-        id: `${cluster.id}__cluster`,
-        x: cp.x,
-        y: cp.y,
-        label: cluster.label,
-        type: "cluster",
-        cluster: cluster.id,
+    setStats({
+      nodes: graph.order,
+      edges: graph.size,
+      clusters: clusters.length,
+    })
+
+    // Create Sigma renderer
+    const renderer = new Sigma(graph, container, {
+      renderEdgeLabels: false,
+      defaultEdgeColor: "rgba(124,58,237,0.22)",
+      defaultNodeColor: CLUSTER_NODE_COLOR,
+      labelColor: { color: "#e4e4ed" },
+      labelSize: 11,
+      labelWeight: "500",
+      labelFont: "Outfit, system-ui, sans-serif",
+      labelDensity: 0.07,
+      labelGridCellSize: 120,
+      allowInvalidContainer: true,
+      nodeReducer: (node, data) => {
+        const cluster = activeClusterRef.current
+        if (!cluster) return { ...data, highlighted: false }
+        if (data.cluster === cluster || (data.nodeType === "cluster" && data.cluster === cluster)) {
+          return { ...data, highlighted: true, size: data.size * 1.3 }
+        }
+        return {
+          ...data,
+          color: "rgba(42,42,58,0.55)",
+          borderColor: "rgba(42,42,58,0.3)",
+          size: data.size * 0.6,
+          label: "",
+        }
+      },
+      edgeReducer: (edge, data) => {
+        const cluster = activeClusterRef.current
+        if (!cluster) return { ...data }
+        const src = graph.getNodeAttribute(graph.source(edge), "cluster")
+        const tgt = graph.getNodeAttribute(graph.target(edge), "cluster")
+        if (src === cluster && tgt === cluster) {
+          return { ...data, color: "rgba(124,58,237,0.55)", size: 2 }
+        }
+        return { ...data, color: "rgba(42,42,58,0.15)", size: 0.5 }
+      },
+    })
+
+    sigmaRef.current = renderer
+
+    // Hover events
+    renderer.on("enterNode", ({ node, event }) => {
+      const attrs = graph.getNodeAttributes(node)
+      const pos = renderer.graphToViewport({ x: attrs.x, y: attrs.y })
+      const rect = container.getBoundingClientRect()
+      setHoveredNode({
+        label: attrs.label,
+        x: pos.x,
+        y: pos.y,
+        containerRect: rect,
       })
-      const files = filesByCluster.get(cluster.id) || []
-      files.forEach((fileNode, idx) => {
-        const spread = Math.max(1, files.length - 1)
-        const offsetX = ((idx - spread / 2) * 110) / Math.max(1, spread)
-        coordinates.set(fileNode.id, {
-          id: fileNode.id,
-          x: cp.x + offsetX,
-          y: 240,
-          label: fileNode.label,
-          type: "file",
-          cluster: cluster.id,
-        })
-      })
+      container.style.cursor = "pointer"
+    })
+    renderer.on("leaveNode", () => {
+      setHoveredNode(null)
+      container.style.cursor = "default"
+    })
+
+    // Click on empty canvas clears selection
+    renderer.on("clickStage", () => {
+      setActiveCluster(null)
+      activeClusterRef.current = null
+      renderer.refresh()
+    })
+
+    return () => {
+      renderer.kill()
+      sigmaRef.current = null
     }
+  }, [nodes, edges, clusters, clusterColorMap, viewMode])
 
-    const lineEdges = sourceEdges
-      .map((edge) => {
-        const source =
-          coordinates.get(edge.source) ||
-          coordinates.get(`${sourceNodes.find((n) => n.id === edge.source)?.cluster}__cluster`)
-        const target =
-          coordinates.get(edge.target) ||
-          coordinates.get(`${sourceNodes.find((n) => n.id === edge.target)?.cluster}__cluster`)
-        if (!source || !target) return null
-        return { ...edge, source, target }
-      })
-      .filter(Boolean)
-
-    return { width, height, coordinates: Array.from(coordinates.values()), lineEdges }
-  }, [clusters, visibleNodes, visibleEdges, activeClusterId, filterToClusterOnly, scopeMode])
-
-  const positionedNodesRef = useRef(positionedNodes)
-  positionedNodesRef.current = positionedNodes
-
-  const [viewBox, setViewBox] = useState(() => ({
-    x: 0,
-    y: 0,
-    w: 1000,
-    h: 380,
-  }))
-  viewBoxRef.current = viewBox
-
+  // Update reducers when activeCluster changes without rebuilding
   useEffect(() => {
-    setViewBox((vb) => ({
-      ...vb,
-      w: positionedNodes.width,
-      h: positionedNodes.height,
-      x: Math.min(vb.x, Math.max(0, positionedNodes.width - vb.w)),
-      y: Math.min(vb.y, Math.max(0, positionedNodes.height - vb.h)),
-    }))
-  }, [positionedNodes.width, positionedNodes.height])
-
-  const fitViewToCluster = useCallback((clusterId) => {
-    const pn = positionedNodesRef.current
-    if (!clusterId) {
-      setViewBox({
-        x: 0,
-        y: 0,
-        w: pn.width,
-        h: pn.height,
-      })
-      return
+    activeClusterRef.current = activeCluster
+    if (sigmaRef.current) {
+      sigmaRef.current.refresh()
     }
-    const pts = pn.coordinates.filter((n) => n.cluster === clusterId)
-    if (!pts.length) return
-    const xs = pts.map((p) => p.x)
-    const ys = pts.map((p) => p.y)
-    const minX = Math.min(...xs)
-    const maxX = Math.max(...xs)
-    const minY = Math.min(...ys)
-    const maxY = Math.max(...ys)
-    const pad = 120
-    const w = Math.min(pn.width, Math.max(280, maxX - minX + pad * 2))
-    const h = Math.min(pn.height, Math.max(220, maxY - minY + pad * 2))
-    const cx = (minX + maxX) / 2
-    const cy = (minY + maxY) / 2
-    let nx = cx - w / 2
-    let ny = cy - h / 2
-    nx = Math.max(0, Math.min(nx, pn.width - w))
-    ny = Math.max(0, Math.min(ny, pn.height - h))
-    setViewBox({ x: nx, y: ny, w, h })
+  }, [activeCluster])
+
+  const handleClusterClick = useCallback((clusterId) => {
+    const next = activeCluster === clusterId ? null : clusterId
+    setActiveCluster(next)
+    activeClusterRef.current = next
+    if (sigmaRef.current) sigmaRef.current.refresh()
+  }, [activeCluster])
+
+  const handleZoomIn = useCallback(() => {
+    const camera = sigmaRef.current?.getCamera()
+    if (!camera) return
+    camera.animate({ ratio: camera.ratio / 1.4 }, { duration: 200 })
   }, [])
 
-  const handleClusterClick = (clusterId, toggleOff) => {
-    const next = toggleOff ? null : clusterId
-    setActiveClusterId(next)
-    requestAnimationFrame(() => {
-      sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-      graphViewportRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-      if (viewMode === "text" && next) {
-        clusterAnchorRefs.current[next]?.scrollIntoView({ behavior: "smooth", block: "nearest" })
-      }
-    })
-  }
+  const handleZoomOut = useCallback(() => {
+    const camera = sigmaRef.current?.getCamera()
+    if (!camera) return
+    camera.animate({ ratio: camera.ratio * 1.4 }, { duration: 200 })
+  }, [])
 
-  useEffect(() => {
-    if (viewMode !== "graph") return
-    if (activeClusterId) fitViewToCluster(activeClusterId)
-    else fitViewToCluster(null)
-  }, [activeClusterId, viewMode, fitViewToCluster])
+  const handleReset = useCallback(() => {
+    sigmaRef.current?.getCamera().animate({ x: 0.5, y: 0.5, ratio: 1, angle: 0 }, { duration: 300 })
+  }, [])
 
-  const onWheelGraph = useCallback((e) => {
-    if (viewMode !== "graph") return
-    e.preventDefault()
-    const el = graphViewportRef.current
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    const pn = positionedNodesRef.current
-    const scale = e.deltaY > 0 ? 1.08 : 1 / 1.08
-    setViewBox((vb) => {
-      const mx = ((e.clientX - rect.left) / rect.width) * vb.w + vb.x
-      const my = ((e.clientY - rect.top) / rect.height) * vb.h + vb.y
-      let nw = Math.min(pn.width, Math.max(120, vb.w * scale))
-      let nh = Math.min(pn.height, Math.max(100, vb.h * scale))
-      let nx = mx - (mx - vb.x) * (nw / vb.w)
-      let ny = my - (my - vb.y) * (nh / vb.h)
-      nx = Math.max(0, Math.min(nx, pn.width - nw))
-      ny = Math.max(0, Math.min(ny, pn.height - nh))
-      return { x: nx, y: ny, w: nw, h: nh }
-    })
-  }, [viewMode])
+  const handleFitGraph = useCallback(() => {
+    const renderer = sigmaRef.current
+    if (!renderer) return
+    renderer.getCamera().animatedReset({ duration: 400 })
+  }, [])
 
-  useEffect(() => {
-    const el = graphViewportRef.current
-    if (!el) return
-    const handler = (e) => onWheelGraph(e)
-    el.addEventListener("wheel", handler, { passive: false })
-    return () => el.removeEventListener("wheel", handler)
-  }, [onWheelGraph])
-
-  const onMouseDownPan = (e) => {
-    if (e.button !== 0) return
-    const vb = viewBoxRef.current
-    dragPanRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      vbX: vb.x,
-      vbY: vb.y,
-      vbW: vb.w,
-      vbH: vb.h,
-    }
-  }
-
-  useEffect(() => {
-    const onMove = (e) => {
-      const drag = dragPanRef.current
-      if (!drag) return
-      const el = graphViewportRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const dx = e.clientX - drag.startX
-      const dy = e.clientY - drag.startY
-      const scaleX = drag.vbW / rect.width
-      const scaleY = drag.vbH / rect.height
-      let nx = drag.vbX - dx * scaleX
-      let ny = drag.vbY - dy * scaleY
-      nx = Math.max(0, Math.min(nx, positionedNodes.width - drag.vbW))
-      ny = Math.max(0, Math.min(ny, positionedNodes.height - drag.vbH))
-      setViewBox({ x: nx, y: ny, w: drag.vbW, h: drag.vbH })
-    }
-    const onUp = () => {
-      dragPanRef.current = null
-    }
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
-    return () => {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
-    }
-  }, [positionedNodes.width, positionedNodes.height])
-
+  // Nodes grouped by cluster for list view
   const nodesByCluster = useMemo(() => {
-    const m = new Map()
-    for (const c of clusters) m.set(c.id, [])
-    for (const n of visibleNodes) {
-      if (!m.has(n.cluster)) m.set(n.cluster, [])
-      m.get(n.cluster).push(n)
+    const map = new Map()
+    for (const c of clusters) map.set(c.id, [])
+    for (const n of nodes) {
+      if (n.type === "file") {
+        if (!map.has(n.cluster)) map.set(n.cluster, [])
+        map.get(n.cluster).push(n)
+      }
     }
-    return m
-  }, [visibleNodes, clusters])
+    return map
+  }, [nodes, clusters])
 
   return (
-    <section
-      ref={sectionRef}
-      className="rounded-xl border border-slate-600/80 bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-slate-950/90 p-5 space-y-4 shadow-2xl backdrop-blur"
-    >
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-slate-50">Knowledge graph</h2>
-          <p className="text-xs text-slate-400 mt-1 max-w-xl">
-            Clusters group files; edges show CONTAINS / CALLS / IMPORTS. Pan & zoom inside the
-            canvas; pick a cluster to scroll/fit to that group.
-          </p>
+    <section className="rounded-xl border border-border-default bg-surface overflow-hidden">
+      {/* Panel header */}
+      <div className="px-5 py-3.5 border-b border-border-subtle flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold text-text-primary">Knowledge Graph</h2>
+          <div className="flex items-center gap-2 text-[11px] text-text-muted font-mono">
+            <span className="px-1.5 py-0.5 rounded bg-elevated border border-border-subtle">
+              {stats.nodes} nodes
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-elevated border border-border-subtle">
+              {stats.edges} edges
+            </span>
+            <span className="px-1.5 py-0.5 rounded bg-elevated border border-border-subtle">
+              {stats.clusters} clusters
+            </span>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">View</span>
+        <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setViewMode("graph")}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+            className={`px-3 py-1 rounded text-xs font-medium transition-all ${
               viewMode === "graph"
-                ? "bg-cyan-500/25 border-cyan-400/60 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
-                : "bg-slate-950/50 border-slate-600 text-slate-400 hover:border-slate-500"
+                ? "bg-accent/20 text-accent border border-accent/40"
+                : "text-text-secondary border border-transparent hover:border-border-default hover:text-text-primary"
             }`}
           >
-            Graphical
+            Graph
           </button>
           <button
             type="button"
-            onClick={() => setViewMode("text")}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-              viewMode === "text"
-                ? "bg-cyan-500/25 border-cyan-400/60 text-cyan-100 shadow-[0_0_12px_rgba(34,211,238,0.25)]"
-                : "bg-slate-950/50 border-slate-600 text-slate-400 hover:border-slate-500"
+            onClick={() => setViewMode("list")}
+            className={`px-3 py-1 rounded text-xs font-medium transition-all ${
+              viewMode === "list"
+                ? "bg-accent/20 text-accent border border-accent/40"
+                : "text-text-secondary border border-transparent hover:border-border-default hover:text-text-primary"
             }`}
           >
-            Text
+            List
           </button>
-          <span className="w-px h-5 bg-slate-600 mx-1 hidden sm:block" aria-hidden />
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Scope</span>
-          <button
-            type="button"
-            onClick={() => setScopeMode("all")}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-              scopeMode === "all"
-                ? "bg-violet-500/25 border-violet-400/60 text-violet-100"
-                : "bg-slate-950/50 border-slate-600 text-slate-400 hover:border-slate-500"
-            }`}
-          >
-            All + highlight
-          </button>
-          <button
-            type="button"
-            onClick={() => setScopeMode("selected")}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-              scopeMode === "selected"
-                ? "bg-violet-500/25 border-violet-400/60 text-violet-100"
-                : "bg-slate-950/50 border-slate-600 text-slate-400 hover:border-slate-500"
-            }`}
-            title="Shows only the chosen cluster when one is selected"
-          >
-            Selected only
-          </button>
-          {viewMode === "graph" ? (
-            <>
-              <span className="w-px h-5 bg-slate-600 mx-1 hidden md:block" aria-hidden />
-              <span className="text-[10px] uppercase tracking-wider text-slate-500 mr-1">Density</span>
-              <button
-                type="button"
-                onClick={() => setGraphDensity("overview")}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                  graphDensity === "overview"
-                    ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-100"
-                    : "bg-slate-950/50 border-slate-600 text-slate-400"
-                }`}
-              >
-                Overview
-              </button>
-              <button
-                type="button"
-                onClick={() => setGraphDensity("full")}
-                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-                  graphDensity === "full"
-                    ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-100"
-                    : "bg-slate-950/50 border-slate-600 text-slate-400"
-                }`}
-              >
-                Full labels
-              </button>
-            </>
-          ) : null}
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {clusters.map((cluster) => {
-          const active = activeClusterId === cluster.id
-          return (
+      {/* Cluster filter pills */}
+      {clusters.length > 0 && (
+        <div className="px-5 py-2.5 border-b border-border-subtle flex flex-wrap gap-2">
+          {clusters.map((cluster) => {
+            const color = clusterColorMap[cluster.id] || CLUSTER_PALETTE[0]
+            const isActive = activeCluster === cluster.id
+            return (
+              <button
+                key={cluster.id}
+                type="button"
+                onClick={() => handleClusterClick(cluster.id)}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                  isActive
+                    ? "border-current bg-current/15 shadow-glow"
+                    : "border-border-default bg-elevated text-text-secondary hover:border-current hover:text-text-primary"
+                }`}
+                style={{ color: isActive ? color : undefined, borderColor: isActive ? color : undefined }}
+              >
+                <span
+                  className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: color }}
+                />
+                {cluster.label}
+                <span className="opacity-60 font-mono">({cluster.size})</span>
+              </button>
+            )
+          })}
+          {activeCluster && (
             <button
-              key={cluster.id}
               type="button"
-              onClick={() => handleClusterClick(cluster.id, active)}
-              className={`rounded-full px-3 py-1.5 text-xs font-medium border transition ${
-                active
-                  ? "bg-indigo-500/90 text-white border-indigo-300 shadow-[0_0_14px_rgba(99,102,241,0.45)]"
-                  : "bg-slate-800/80 border-slate-600 text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-              }`}
+              onClick={() => handleClusterClick(null)}
+              className="px-3 py-1 rounded-full text-xs border border-border-default text-text-muted hover:border-border-default hover:text-text-secondary transition-all"
             >
-              {cluster.label}{" "}
-              <span className="opacity-70">({cluster.size})</span>
+              Clear filter ×
             </button>
-          )
-        })}
-      </div>
-
-      {scopeMode === "selected" && !activeClusterId ? (
-        <p className="text-xs text-amber-300/90 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
-          Select a cluster above to isolate it, or switch scope to &quot;All + highlight&quot;.
-        </p>
-      ) : null}
+          )}
+        </div>
+      )}
 
       {viewMode === "graph" ? (
-        <div className="space-y-2">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
-            <span>
-              Drag to pan · wheel to zoom · cluster click fits view
-            </span>
+        <div className="relative bg-deep" style={{ height: "480px" }}>
+          {/* Sigma canvas container */}
+          <div ref={containerRef} className="sigma-container" />
+
+          {/* Hover tooltip */}
+          {hoveredNode && (
+            <div
+              className="pointer-events-none absolute z-20 px-2.5 py-1.5 rounded-lg bg-elevated border border-border-default text-xs text-text-primary shadow-glow-soft whitespace-nowrap animate-fade-in"
+              style={{
+                left: Math.min(hoveredNode.x + 14, (hoveredNode.containerRect?.width || 480) - 200),
+                top: Math.max(hoveredNode.y - 28, 4),
+              }}
+            >
+              {hoveredNode.label}
+            </div>
+          )}
+
+          {/* Zoom controls */}
+          <div className="absolute bottom-4 right-4 flex flex-col gap-1 z-10">
             <button
               type="button"
-              onClick={() => fitViewToCluster(activeClusterId)}
-              className="rounded border border-slate-600 px-2 py-1 text-slate-300 hover:bg-slate-800"
+              onClick={handleZoomIn}
+              className="p-1.5 rounded-lg bg-elevated border border-border-default text-text-secondary hover:text-text-primary hover:border-border-default transition-all"
+              title="Zoom in"
             >
-              Refit selection
+              <ZoomIn size={14} />
             </button>
             <button
               type="button"
-              onClick={() => fitViewToCluster(null)}
-              className="rounded border border-slate-600 px-2 py-1 text-slate-300 hover:bg-slate-800"
+              onClick={handleZoomOut}
+              className="p-1.5 rounded-lg bg-elevated border border-border-default text-text-secondary hover:text-text-primary hover:border-border-default transition-all"
+              title="Zoom out"
             >
-              Show all
+              <ZoomOut size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={handleFitGraph}
+              className="p-1.5 rounded-lg bg-elevated border border-border-default text-text-secondary hover:text-text-primary hover:border-border-default transition-all"
+              title="Fit to screen"
+            >
+              <Maximize2 size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              className="p-1.5 rounded-lg bg-elevated border border-border-default text-text-secondary hover:text-text-primary hover:border-border-default transition-all"
+              title="Reset camera"
+            >
+              <RotateCcw size={14} />
             </button>
           </div>
-          <div
-            ref={graphViewportRef}
-            className="relative rounded-xl border border-slate-600/60 bg-slate-950/70 overflow-auto max-h-[min(65vh,520px)] shadow-inner cursor-grab active:cursor-grabbing select-none"
-            onMouseDown={onMouseDownPan}
-          >
-            <svg
-              width="100%"
-              height={positionedNodes.height}
-              style={{ minWidth: "min(100%, 480px)" }}
-              viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-              preserveAspectRatio="xMidYMid meet"
-              role="img"
-              aria-label="Knowledge graph visualization"
-            >
-              <defs>
-                <linearGradient id="kg-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#0f172a" />
-                  <stop offset="50%" stopColor="#0c1222" />
-                  <stop offset="100%" stopColor="#020617" />
-                </linearGradient>
-                <filter id="kg-glow" x="-40%" y="-40%" width="180%" height="180%">
-                  <feGaussianBlur stdDeviation="3" result="b" />
-                  <feMerge>
-                    <feMergeNode in="b" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-                <marker
-                  id="arrow"
-                  markerWidth="8"
-                  markerHeight="8"
-                  refX="6"
-                  refY="4"
-                  orient="auto"
-                  markerUnits="strokeWidth"
-                >
-                  <path d="M0,0 L8,4 L0,8 z" fill="rgba(148,163,184,0.55)" />
-                </marker>
-              </defs>
-              <rect
-                x={0}
-                y={0}
-                width={positionedNodes.width}
-                height={positionedNodes.height}
-                fill="url(#kg-bg)"
-                rx="12"
-              />
 
-              {positionedNodes.lineEdges.map((edge, idx) => {
-                const dx = edge.target.x - edge.source.x
-                const dy = edge.target.y - edge.source.y
-                const len = Math.hypot(dx, dy) || 1
-                const shorten = 14
-                const x1 = edge.source.x + (dx / len) * shorten
-                const y1 = edge.source.y + (dy / len) * shorten
-                const x2 = edge.target.x - (dx / len) * shorten
-                const y2 = edge.target.y - (dy / len) * shorten
-                const midX = (x1 + x2) / 2
-                const midY = (y1 + y2) / 2 - 8
-                const inSel = (coord) =>
-                  !activeClusterId || coord.cluster === activeClusterId
-                const emphasized =
-                  !activeClusterId ||
-                  filterToClusterOnly ||
-                  (inSel(edge.source) && inSel(edge.target))
-                return (
-                  <g key={`${edge.source.id}-${edge.target.id}-${idx}`}>
-                    <path
-                      d={`M ${x1} ${y1} Q ${midX} ${midY} ${x2} ${y2}`}
-                      fill="none"
-                      stroke={emphasized ? "rgba(94,234,212,0.35)" : "rgba(51,65,85,0.45)"}
-                      strokeWidth={emphasized ? 1.8 : 1}
-                      markerEnd="url(#arrow)"
-                      opacity={emphasized ? 1 : graphDensity === "overview" ? 0.25 : 0.35}
-                    />
-                  </g>
-                )
-              })}
+          {/* Legend */}
+          <div className="absolute bottom-4 left-4 flex flex-col gap-1.5 z-10">
+            <div className="flex items-center gap-2 text-[10px] text-text-muted">
+              <span className="w-3 h-3 rounded-full bg-accent flex-shrink-0" />
+              Cluster hub
+            </div>
+            {clusters.slice(0, 4).map((c) => (
+              <div key={c.id} className="flex items-center gap-2 text-[10px] text-text-muted">
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: clusterColorMap[c.id] }}
+                />
+                {c.label}
+              </div>
+            ))}
+            {clusters.length > 4 && (
+              <div className="text-[10px] text-text-muted opacity-60">
+                +{clusters.length - 4} more
+              </div>
+            )}
+          </div>
 
-              {positionedNodes.coordinates.map((node) => {
-                const isCluster = node.type === "cluster"
-                const emphasized = isNodeEmphasized(node.id, node.cluster)
-                const labelShort =
-                  node.label.length > 42 ? `${node.label.slice(0, 40)}…` : node.label
-                if (isCluster) {
-                  return (
-                    <g
-                      key={node.id}
-                      filter={emphasized ? "url(#kg-glow)" : undefined}
-                      opacity={emphasized ? 1 : 0.45}
-                    >
-                      <rect
-                        x={node.x - 72}
-                        y={node.y - 22}
-                        width={144}
-                        height={44}
-                        rx={12}
-                        fill={emphasized ? "rgba(34,211,238,0.18)" : "rgba(51,65,85,0.35)"}
-                        stroke={emphasized ? "rgba(34,211,238,0.75)" : "rgba(71,85,105,0.6)"}
-                        strokeWidth="1.5"
-                      />
-                      <text
-                        x={node.x}
-                        y={node.y + 4}
-                        textAnchor="middle"
-                        fill={emphasized ? "rgb(207,250,254)" : "rgb(148,163,184)"}
-                        fontSize="11"
-                        fontWeight="600"
-                      >
-                        {labelShort}
-                      </text>
-                    </g>
-                  )
-                }
-                const showFileLabel = graphDensity === "full"
-                return (
-                  <g key={node.id} opacity={emphasized ? 1 : 0.35}>
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={emphasized ? (showFileLabel ? 9 : 6) : 5}
-                      fill={
-                        emphasized ? "rgba(129,140,248,0.85)" : "rgba(71,85,105,0.55)"
-                      }
-                      stroke={emphasized ? "rgba(196,181,253,0.9)" : "rgba(100,116,139,0.6)"}
-                      strokeWidth="1.2"
-                    />
-                    {showFileLabel ? (
-                      <text
-                        x={node.x}
-                        y={node.y + 22}
-                        textAnchor="middle"
-                        fill="rgba(226,232,240,0.88)"
-                        fontSize="9"
-                      >
-                        {labelShort}
-                      </text>
-                    ) : null}
-                  </g>
-                )
-              })}
-            </svg>
+          {/* Hint */}
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[10px] text-text-muted pointer-events-none">
+            Scroll to zoom · Drag to pan · Click pill to filter
           </div>
         </div>
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="rounded-xl border border-slate-600/60 bg-slate-950/50 p-3 md:col-span-2 space-y-4 max-h-[min(65vh,520px)] overflow-y-auto">
-            <p className="text-sm font-medium text-slate-200">Nodes by cluster</p>
-            {clusters.map((cluster) => {
-              const list = nodesByCluster.get(cluster.id) || []
-              if (!list.length) return null
-              return (
-                <div
-                  key={cluster.id}
-                  id={`kg-cluster-${cluster.id}`}
-                  ref={(el) => {
-                    if (el) clusterAnchorRefs.current[cluster.id] = el
-                  }}
-                  className={`rounded-lg border p-3 transition ${
-                    activeClusterId === cluster.id
-                      ? "border-indigo-400/50 bg-indigo-500/10"
-                      : "border-slate-700/80 bg-slate-900/40"
-                  }`}
-                >
-                  <p className="text-xs font-semibold text-cyan-200/90 mb-2">{cluster.label}</p>
-                  <ul className="space-y-1.5 text-xs">
-                    {list.map((node) => {
-                      const highlighted =
-                        !filterToClusterOnly &&
-                        highlightedNodeIds.has(node.id) &&
-                        activeClusterId
-                      return (
-                        <li
-                          key={node.id}
-                          className={`rounded-lg px-2.5 py-1.5 border transition ${
-                            highlighted
-                              ? "bg-indigo-500/20 text-indigo-100 border-indigo-400/50"
-                              : "bg-slate-900/80 text-slate-300 border-slate-700/80"
-                          }`}
-                        >
-                          <span className="font-semibold text-cyan-400/90">[{node.type}]</span>{" "}
-                          {node.label}
-                        </li>
-                      )
-                    })}
-                  </ul>
+        /* List view */
+        <div className="p-5 space-y-3 max-h-[480px] overflow-y-auto scrollbar-thin">
+          {clusters.map((cluster) => {
+            const fileNodes = nodesByCluster.get(cluster.id) || []
+            const color = clusterColorMap[cluster.id] || CLUSTER_PALETTE[0]
+            const isActive = activeCluster === cluster.id
+            return (
+              <div
+                key={cluster.id}
+                className={`rounded-lg border p-3 transition-all ${
+                  isActive
+                    ? "border-current bg-current/5"
+                    : "border-border-default bg-elevated"
+                }`}
+                style={{ borderColor: isActive ? color : undefined }}
+              >
+                <div className="flex items-center gap-2 mb-2.5">
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+                  <p className="text-xs font-semibold" style={{ color }}>{cluster.label}</p>
+                  <span className="ml-auto text-[10px] font-mono text-text-muted">{fileNodes.length} files</span>
                 </div>
-              )
-            })}
-          </div>
+                <ul className="space-y-1">
+                  {fileNodes.map((node) => (
+                    <li
+                      key={node.id}
+                      className="text-xs text-text-secondary font-mono px-2 py-1 rounded bg-deep border border-border-subtle truncate"
+                      title={node.label}
+                    >
+                      {node.label}
+                    </li>
+                  ))}
+                  {fileNodes.length === 0 && (
+                    <li className="text-xs text-text-muted italic">No file nodes</li>
+                  )}
+                </ul>
+              </div>
+            )
+          })}
 
-          <div className="rounded-xl border border-slate-600/60 bg-slate-950/50 p-3 md:col-span-2">
-            <p className="text-sm font-medium mb-2 text-slate-200">Edges</p>
-            <ul className="space-y-1.5 text-xs max-h-40 overflow-y-auto font-mono text-slate-400 pr-1">
-              {visibleEdges.map((edge, idx) => (
-                <li
-                  key={`${edge.source}-${edge.target}-${idx}`}
-                  className="rounded-lg px-2 py-1 bg-slate-900/60 border border-slate-800/80"
-                >
-                  <span className="text-emerald-400/80">{edge.source}</span>{" "}
-                  <span className="text-slate-500">[{edge.type}]</span> →{" "}
-                  <span className="text-sky-400/80">{edge.target}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {/* Edges section */}
+          {edges.length > 0 && (
+            <div className="rounded-lg border border-border-default bg-elevated p-3">
+              <p className="text-xs font-semibold text-text-secondary mb-2">Edges ({edges.length})</p>
+              <ul className="space-y-1 max-h-36 overflow-y-auto scrollbar-thin">
+                {edges.map((edge, idx) => (
+                  <li
+                    key={`${edge.source}-${edge.target}-${idx}`}
+                    className="text-[11px] font-mono text-text-muted px-2 py-0.5 rounded bg-deep border border-border-subtle"
+                  >
+                    <span className="text-blue-400/80">{edge.source}</span>
+                    {" "}
+                    <span className="text-text-muted opacity-60">[{edge.type}]</span>
+                    {" → "}
+                    <span className="text-emerald-400/80">{edge.target}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </section>

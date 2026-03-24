@@ -1,16 +1,6 @@
 import { useEffect, useRef } from "react"
+import { Bot, Loader2, Wrench } from "lucide-react"
 
-/**
- * AgentTrace renders the live stream of `agent_step` events.
- *
- * Data contract:
- * - `steps` is an array where each item comes from backend SSE payload:
- *   { tool: string, summary: string }
- *
- * Behavior:
- * - Auto-scrolls to the bottom whenever a new step arrives
- * - Shows a small running indicator while analysis is active
- */
 export default function AgentTrace({ steps, loading }) {
   const listRef = useRef(null)
 
@@ -20,26 +10,42 @@ export default function AgentTrace({ steps, loading }) {
   }, [steps])
 
   return (
-    <section className="rounded-lg border border-slate-700/80 bg-slate-900/60 p-4 space-y-3 shadow-xl backdrop-blur">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Live Agent Trace</h2>
-        {loading ? <span className="text-xs text-indigo-300 pulse-soft">Running...</span> : null}
+    <section className="rounded-xl border border-border-default bg-surface overflow-hidden animate-slide-up">
+      {/* Header */}
+      <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2.5">
+        <Bot size={14} className="text-accent flex-shrink-0" />
+        <h2 className="text-sm font-semibold text-text-primary">Agent Trace</h2>
+        {loading && (
+          <div className="ml-auto flex items-center gap-1.5 text-xs text-accent">
+            <Loader2 size={11} className="animate-spin" />
+            Running
+          </div>
+        )}
       </div>
 
+      {/* Log */}
       <div
         ref={listRef}
-        className="h-44 overflow-y-auto rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm"
+        className="p-4 h-44 overflow-y-auto scrollbar-thin space-y-2"
       >
         {steps.length === 0 ? (
-          <p className="text-slate-400">No agent steps yet.</p>
+          <p className="text-xs text-text-muted font-mono">No agent steps yet. Run analysis to see live tool calls here.</p>
         ) : (
-          <ul className="space-y-2">
-            {steps.map((step, idx) => (
-              <li key={`${step.tool}-${idx}`} className="text-slate-300">
-                <span className="font-semibold text-indigo-300">{step.tool}</span>: {step.summary}
-              </li>
-            ))}
-          </ul>
+          steps.map((step, idx) => (
+            <div
+              key={`${step.tool}-${idx}`}
+              className="flex items-start gap-2.5 animate-fade-in"
+            >
+              <div className="mt-0.5 flex-shrink-0 p-1 rounded bg-accent/15 border border-accent/20">
+                <Wrench size={9} className="text-accent" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-xs font-semibold text-accent font-mono">{step.tool}</span>
+                <span className="text-xs text-text-muted mx-1">·</span>
+                <span className="text-xs text-text-secondary">{step.summary}</span>
+              </div>
+            </div>
+          ))
         )}
       </div>
     </section>

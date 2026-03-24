@@ -1,15 +1,5 @@
-/**
- * PRInput is Step 2 in the UI flow.
- *
- * What it does:
- * - Collects a PR URL
- * - Performs lightweight front-end validation before submit
- * - Disables submit while analysis is running
- *
- * Connected to:
- * - App's `handleAnalyzePr`, which calls `analyzePR()` from api.js
- * - AgentTrace/ImpactSummary, which render results of that stream
- */
+import { GitPullRequest, Loader2 } from "lucide-react"
+
 function isValidPrUrl(value) {
   try {
     const url = new URL(value)
@@ -31,32 +21,54 @@ export default function PRInput({ prUrl, setPrUrl, disabled, onSubmit }) {
   }
 
   return (
-    <section className="rounded-lg border border-slate-700/80 bg-slate-900/60 p-4 space-y-3 shadow-xl backdrop-blur">
-      <h2 className="text-lg font-semibold">Step 2: Analyze Pull Request</h2>
+    <section className="rounded-xl border border-border-default bg-surface overflow-hidden animate-slide-up">
+      {/* Header */}
+      <div className="px-5 py-3.5 border-b border-border-subtle flex items-center gap-2.5">
+        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-accent/20 text-accent text-xs font-bold flex-shrink-0">
+          2
+        </div>
+        <h2 className="text-sm font-semibold text-text-primary">Analyze Pull Request</h2>
+      </div>
 
-      <form className="flex gap-2" onSubmit={handleSubmit}>
-        <input
-          type="url"
-          value={prUrl}
-          onChange={(event) => setPrUrl(event.target.value)}
-          placeholder="https://github.com/owner/repo/pull/42"
-          className="flex-1 rounded-md border border-slate-600 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
-          required
-        />
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-md bg-indigo-500 text-white px-4 py-2 text-sm disabled:opacity-50 transition hover:bg-indigo-400"
-        >
-          {disabled ? "Analyzing..." : "Analyze"}
-        </button>
-      </form>
+      <div className="p-5 space-y-3">
+        <form className="flex gap-2" onSubmit={handleSubmit}>
+          <div className="flex-1 relative">
+            <GitPullRequest
+              size={14}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
+            />
+            <input
+              type="url"
+              value={prUrl}
+              onChange={(e) => setPrUrl(e.target.value)}
+              placeholder="https://github.com/owner/repo/pull/42"
+              className="w-full rounded-lg border border-border-default bg-deep pl-8 pr-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent/60 focus:ring-1 focus:ring-accent/30 transition-all"
+              required
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-accent-dim transition-all shadow-glow"
+          >
+            {disabled ? (
+              <>
+                <Loader2 size={13} className="animate-spin" />
+                Analyzing
+              </>
+            ) : (
+              "Analyze"
+            )}
+          </button>
+        </form>
 
-      {hasValue && !isValid ? (
-        <p className="text-sm text-amber-300">
-          Enter a valid GitHub PR URL ending in /pull/123.
-        </p>
-      ) : null}
+        {hasValue && !isValid && (
+          <p className="text-xs text-amber-400 flex items-center gap-1.5 animate-fade-in">
+            <span className="opacity-70">⚠</span>
+            Enter a valid GitHub PR URL — e.g. github.com/owner/repo/pull/123
+          </p>
+        )}
+      </div>
     </section>
   )
 }

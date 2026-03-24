@@ -84,10 +84,6 @@ function buildMarkdownReport(result) {
 }
 
 export default function App() {
-  // App owns the full page state so each component can stay focused:
-  // - Repo indexing flow
-  // - Graph state (mock first, real after index)
-  // - Analysis streaming flow (trace + final result)
   const [repoUrl, setRepoUrl] = useState("")
   const [indexing, setIndexing] = useState(false)
   const [indexMessages, setIndexMessages] = useState([])
@@ -108,9 +104,6 @@ export default function App() {
     [analysisResult],
   )
 
-  // Session-only cache (browser tab/session):
-  // Keeps lightweight data only, so users can refresh while keeping recent context.
-  // Heavy repository/index artifacts remain backend responsibility.
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem("qlankr_ui_session")
@@ -124,7 +117,7 @@ export default function App() {
       if (parsed.analysisResult) setAnalysisResult(parsed.analysisResult)
       if (Array.isArray(parsed.agentSteps)) setAgentSteps(parsed.agentSteps)
     } catch {
-      // Ignore broken cache payloads and continue with clean state.
+      // ignore broken cache
     }
   }, [])
 
@@ -142,17 +135,9 @@ export default function App() {
     try {
       sessionStorage.setItem("qlankr_ui_session", JSON.stringify(payload))
     } catch {
-      // Storage can fail in private mode or quota limits; UI still works.
+      // quota or private mode
     }
-  }, [
-    repoUrl,
-    prUrl,
-    indexedRepo,
-    indexMessages,
-    graphData,
-    analysisResult,
-    agentSteps,
-  ])
+  }, [repoUrl, prUrl, indexedRepo, indexMessages, graphData, analysisResult, agentSteps])
 
   async function handleIndexRepo() {
     setError("")
@@ -174,7 +159,7 @@ export default function App() {
             const graph = await getGraph(ownerRepo.owner, ownerRepo.repo)
             setGraphData(graph)
           } catch {
-            // Keep mock graph when backend graph endpoint is not ready yet.
+            // keep mock graph
           }
         },
         onError: (message) => setError(message),
@@ -223,29 +208,28 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen app-bg text-slate-100 relative overflow-hidden">
-      <div className="orb orb-one" />
-      <div className="orb orb-two" />
-      <main className="mx-auto max-w-6xl p-6 space-y-6 relative z-10">
-        <header className="space-y-2 glass-panel p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-bold tracking-tight">Qlankr - PR Impact Analysis</h1>
-            {mockEnabled ? (
-              <span className="rounded-full border border-cyan-400/60 bg-cyan-400/10 px-2.5 py-1 text-xs text-cyan-200 pulse-soft">
-                Mock SSE mode enabled
-              </span>
-            ) : null}
-          </div>
-          <p className="text-sm text-slate-300">
-            Step 1: Index repository. Step 2: Analyze a PR with live trace.
-          </p>
-        </header>
+    <div className="min-h-screen bg-void text-text-primary font-sans">
+      {/* Header */}
+      <header className="sticky top-0 z-50 border-b border-border-subtle bg-deep/80 backdrop-blur-md px-6 py-3 flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 rounded-full bg-accent animate-breathe" />
+          <span className="font-semibold tracking-tight">Qlankr</span>
+        </div>
+        <span className="text-text-muted text-sm hidden sm:block">/ PR Impact Analysis</span>
+        {mockEnabled && (
+          <span className="ml-auto text-xs text-accent border border-accent/30 bg-accent/10 rounded-full px-2.5 py-0.5 pulse-soft">
+            Mock SSE
+          </span>
+        )}
+      </header>
 
-        {error ? (
-          <div className="rounded-md border border-red-400/50 bg-red-500/10 p-3 text-sm text-red-200">
+      {/* Main */}
+      <main className="max-w-5xl mx-auto px-4 py-6 space-y-4">
+        {error && (
+          <div className="animate-slide-up rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
             {error}
           </div>
-        ) : null}
+        )}
 
         <RepoInput
           repoUrl={repoUrl}
@@ -267,10 +251,7 @@ export default function App() {
 
         <AgentTrace steps={agentSteps} loading={analyzing} />
 
-        <ImpactSummary
-          result={analysisResult}
-          onCopyMarkdown={handleCopyMarkdown}
-        />
+        <ImpactSummary result={analysisResult} onCopyMarkdown={handleCopyMarkdown} />
       </main>
     </div>
   )
