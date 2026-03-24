@@ -34,6 +34,128 @@ function dimHex(hex, alpha = 0.2) {
   return hex + Math.round(alpha * 255).toString(16).padStart(2, "0")
 }
 
+function hashInt(str) {
+  let h = 0
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+/**
+ * Force-directed layout — runs synchronously, fast enough for ~300–500 nodes.
+ * Cross-cluster repulsion is much stronger than same-cluster to carve out
+ * distinct territories in 2D space.
+ */
+function runForceLayout(nodeList, edgeList, width, height) {
+  const ITER        = 180
+  const REP_FF_SAME =  4000   // file ↔ file, same cluster
+  const REP_FF_DIFF = 35000   // file ↔ file, different cluster — primary driver of separation
+  const REP_CC      = 80000   // cluster label ↔ cluster label
+  const REP_CF      = 40000   // cluster label ↔ any file
+  const K_EDGE      =  0.018  // edge spring attraction
+  const K_COHESION  =  0.10   // file → its cluster label (keep clusters tight)
+  const DAMP        =  0.74
+
+  const pos = new Map()
+
+  const clusterNodes = nodeList.filter(n => n.type === "cluster")
+  const NC = Math.max(1, clusterNodes.length)
+  clusterNodes.forEach((n, i) => {
+    const angle = (i / NC) * 2 * Math.PI - Math.PI / 2
+    const r = Math.min(width, height) * 0.36
+    pos.set(n.id, {
+      x: width / 2 + (NC > 1 ? r * Math.cos(angle) : 0),
+      y: height / 2 + (NC > 1 ? r * Math.sin(angle) : 0),
+      vx: 0, vy: 0,
+    })
+  })
+
+  nodeList.filter(n => n.type === "file").forEach(n => {
+    const cp = pos.get(`${n.cluster}__cluster`) ?? { x: width / 2, y: height / 2 }
+    const h = hashInt(n.id)
+    const angle = (h % 10000) / 10000 * 2 * Math.PI
+    const r = 30 + (h % 110)
+    pos.set(n.id, { x: cp.x + r * Math.cos(angle), y: cp.y + r * Math.sin(angle), vx: 0, vy: 0 })
+  })
+
+  const arr = nodeList.filter(n => pos.has(n.id))
+
+  for (let iter = 0; iter < ITER; iter++) {
+    const cool = Math.max(0.04, 1 - iter / ITER)
+
+    for (let i = 0; i < arr.length; i++) {
+      const a = pos.get(arr[i].id)
+      for (let j = i + 1; j < arr.length; j++) {
+        const b = pos.get(arr[j].id)
+        const dx = b.x - a.x || 0.1
+        const dy = b.y - a.y || 0.1
+        const d2 = Math.max(100, dx * dx + dy * dy)
+        const d  = Math.sqrt(d2)
+        const ti = arr[i].type, tj = arr[j].type
+        const sameCluster = arr[i].cluster === arr[j].cluster
+        const rep = ti === "cluster" && tj === "cluster" ? REP_CC
+          : ti === "cluster" || tj === "cluster" ? REP_CF
+          : sameCluster ? REP_FF_SAME : REP_FF_DIFF
+        const f = rep / d2
+        const fx = (dx / d) * f, fy = (dy / d) * f
+        a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy
+      }
+    }
+
+    for (const e of edgeList) {
+      const a = pos.get(e.source), b = pos.get(e.target)
+      if (!a || !b) continue
+      const dx = b.x - a.x, dy = b.y - a.y
+      const d = Math.sqrt(dx * dx + dy * dy) || 1
+      const f = d * K_EDGE
+      const fx = (dx / d) * f, fy = (dy / d) * f
+      a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy
+    }
+
+    for (const n of arr) {
+      if (n.type !== "file") continue
+      const a = pos.get(n.id), b = pos.get(`${n.cluster}__cluster`)
+      if (!a || !b) continue
+      const dx = b.x - a.x, dy = b.y - a.y
+      const d = Math.sqrt(dx * dx + dy * dy) || 1
+      const f = d * K_COHESION
+      a.vx += (dx / d) * f; a.vy += (dy / d) * f
+    }
+
+    for (const n of arr) {
+      const p = pos.get(n.id)
+      p.x += p.vx * cool; p.y += p.vy * cool
+      p.vx *= DAMP; p.vy *= DAMP
+    }
+  }
+
+  const PAD = 100
+  const xs = arr.map(n => pos.get(n.id).x), ys = arr.map(n => pos.get(n.id).y)
+  const x0 = Math.min(...xs), x1 = Math.max(...xs)
+  const y0 = Math.min(...ys), y1 = Math.max(...ys)
+  const sx = (width - PAD * 2) / Math.max(1, x1 - x0)
+  const sy = (height - PAD * 2) / Math.max(1, y1 - y0)
+  const sc = Math.min(sx, sy)
+  const ox = (width  - (x1 - x0) * sc) / 2
+  const oy = (height - (y1 - y0) * sc) / 2
+  for (const n of arr) {
+    const p = pos.get(n.id)
+    p.x = ox + (p.x - x0) * sc
+    p.y = oy + (p.y - y0) * sc
+  }
+
+  return pos
+}
+
+const CLUSTER_PALETTE = [
+  { stroke: "rgba(34,211,238,0.45)",  node: "rgba(34,211,238,0.2)",  nodeBorder: "rgba(34,211,238,0.8)",  dot: "rgba(34,211,238,0.85)",  dotBorder: "rgba(165,243,252,0.9)",  text: "rgb(207,250,254)" },
+  { stroke: "rgba(167,139,250,0.45)", node: "rgba(167,139,250,0.2)", nodeBorder: "rgba(167,139,250,0.8)", dot: "rgba(167,139,250,0.85)", dotBorder: "rgba(221,214,254,0.9)", text: "rgb(237,233,254)" },
+  { stroke: "rgba(52,211,153,0.45)",  node: "rgba(52,211,153,0.2)",  nodeBorder: "rgba(52,211,153,0.8)",  dot: "rgba(52,211,153,0.85)",  dotBorder: "rgba(187,247,208,0.9)",  text: "rgb(209,250,229)" },
+  { stroke: "rgba(251,146,60,0.45)",  node: "rgba(251,146,60,0.2)",  nodeBorder: "rgba(251,146,60,0.8)",  dot: "rgba(251,146,60,0.85)",  dotBorder: "rgba(253,211,155,0.9)",  text: "rgb(254,243,199)" },
+  { stroke: "rgba(244,114,182,0.45)", node: "rgba(244,114,182,0.2)", nodeBorder: "rgba(244,114,182,0.8)", dot: "rgba(244,114,182,0.85)", dotBorder: "rgba(251,207,232,0.9)", text: "rgb(253,242,248)" },
+  { stroke: "rgba(56,189,248,0.45)",  node: "rgba(56,189,248,0.2)",  nodeBorder: "rgba(56,189,248,0.8)",  dot: "rgba(56,189,248,0.85)",  dotBorder: "rgba(186,230,253,0.9)",  text: "rgb(224,242,254)" },
+  { stroke: "rgba(234,179,8,0.45)",   node: "rgba(234,179,8,0.2)",   nodeBorder: "rgba(234,179,8,0.8)",   dot: "rgba(234,179,8,0.85)",   dotBorder: "rgba(253,240,138,0.9)",   text: "rgb(254,249,195)" },
+]
+
 export default function KnowledgeGraph({ graphData }) {
   const containerRef = useRef(null)
   const sigmaRef = useRef(null)
@@ -45,9 +167,9 @@ export default function KnowledgeGraph({ graphData }) {
   const [stats, setStats] = useState({ nodes: 0, edges: 0, clusters: 0 })
   const [viewMode, setViewMode] = useState("graph") // "graph" | "list"
 
-  const nodes = graphData?.nodes || []
-  const edges = graphData?.edges || []
-  const clusters = graphData?.clusters || []
+  const nodes    = graphData?.nodes    || []
+  const edges    = graphData?.edges    || []
+  const clusters = (graphData?.clusters || []).filter(c => c.size > 0)
 
   // Stable color map: cluster id → color
   const clusterColorMap = useMemo(() => {
@@ -120,7 +242,6 @@ export default function KnowledgeGraph({ graphData }) {
         adjustSizes: true,
       },
     })
-
     setStats({
       nodes: graph.order,
       edges: graph.size,
@@ -191,7 +312,6 @@ export default function KnowledgeGraph({ graphData }) {
       activeClusterRef.current = null
       renderer.refresh()
     })
-
     return () => {
       renderer.kill()
       sigmaRef.current = null
