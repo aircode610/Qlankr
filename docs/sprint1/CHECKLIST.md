@@ -1,0 +1,33 @@
+# Sprint 1 — Testing Checklist
+
+## Backend
+
+| Feature | File | Tactic | Exact Tests |
+|---|---|---|---|
+| Health endpoint | `main.py` | Endpoint test via ASGI `AsyncClient` | `test_health_returns_ok` — GET /health → 200, `{"status": "ok"}` |
+| Repo indexing endpoint | `main.py` | Endpoint test (subprocess mocked) | `test_index_streams_sse_content_type` — response has `Content-Type: text/event-stream`<br>`test_index_bad_url_streams_error_event` — single-segment URL → SSE error event<br>`test_index_git_clone_fail_streams_error_event` — patched failing subprocess → SSE error event<br>`test_index_request_validation` — missing body → 422 |
+| Graph endpoint | `main.py` | Endpoint test (registry seeded directly) | `test_graph_unindexed_returns_empty` — unknown repo → empty `GraphData`<br>`test_graph_after_index_returns_data` — seeded registry → populated nodes/edges/clusters |
+| ~~Analyze stub endpoint~~ | ~~`main.py`~~ | ~~Endpoint test~~ | ~~`test_analyze_stub_streams_error_event` — POST /analyze → SSE `error` event with `"Agent not yet implemented"`<br>`test_analyze_request_validation` — missing body → 422~~ |
+| Pydantic models | `models.py` | Unit tests (instantiation + `ValidationError`) | `test_index_request_requires_repo_url`<br>`test_analyze_request_requires_pr_url`<br>`test_graph_node_type_literal` — `type="unknown"` rejected<br>`test_graph_edge_type_literal` — `type="CONTAINS"` rejected (only `"CALLS"`/`"IMPORTS"` valid)<br>`test_affected_component_confidence_literal` — `"very high"` rejected<br>`test_error_event_type_default` — `type` is always `"error"`<br>`test_result_event_inherits_analyze_response` |
+| URL parsing | `indexer.py` | Unit test (pure function) | `test_parse_owner_repo_standard_url`<br>`test_parse_owner_repo_strips_git_suffix`<br>`test_parse_owner_repo_rejects_short_path` → `ValueError` |
+| Stage detection | `indexer.py` | Unit test (pure function) | `test_detect_stage_clone_keyword` — "cloning" → `"clone"`<br>`test_detect_stage_cluster_keyword` — "clustering" → `"clustering"`<br>`test_detect_stage_unknown_defaults_to_analyze` |
+| Graph file parsing | `indexer.py` | Unit test with temp dir fixtures | `test_read_graph_data_no_dir` → empty `GraphData`<br>`test_read_graph_data_unified_graph_json` — unified `graph.json` → populated<br>`test_read_graph_data_fallback_split_files` — `nodes.json` + `edges.json` + `clusters.json`<br>`test_read_graph_data_partial_split_files`<br>`test_read_graph_data_invalid_node_type_coercion`<br>`test_read_graph_data_invalid_edge_type_coercion` |
+| Indexer async flow | `indexer.py` | Async unit test (`AsyncMock` for subprocess) | `test_index_repo_bad_url_yields_error`<br>`test_index_repo_git_clone_failure`<br>`test_index_repo_gitnexus_not_found`<br>`test_index_repo_successful_flow_events` — yields `index_step` then `index_done` in order<br>`test_index_repo_populates_registry` |
+| Graph data retrieval | `indexer.py` | Async unit test (registry manipulated directly) | `test_get_graph_data_not_indexed` → empty<br>`test_get_graph_data_cached_graph` → returns cache<br>`test_get_graph_data_lazy_read` → reads from disk on first call, caches result |
+
+---
+
+## Frontend
+
+| Feature | File | Tactic | Exact Tests |
+|---|---|---|---|
+| PR URL validation | `PRInput.jsx` | Component test (`@testing-library/react`) | `test_analyze_button_disabled_empty_url`<br>`test_analyze_button_disabled_invalid_url` — no `/pull/N` → disabled + validation message<br>`test_analyze_button_enabled_valid_url`<br>`test_analyze_button_disabled_by_prop`<br>`test_submit_calls_onSubmit_valid_url`<br>`test_submit_does_not_call_onSubmit_invalid_url` |
+| Repo input + indexing | `RepoInput.jsx` | Component test | `test_connect_button_disabled_empty_url`<br>`test_connect_button_disabled_when_indexing` — shows "Indexing..."<br>`test_connect_button_calls_onConnect`<br>`test_renders_index_progress_messages`<br>`test_shows_indexed_repo_summary` |
+| Agent trace display | `AgentTrace.jsx` | Component test | `test_shows_empty_state_no_steps`<br>`test_renders_each_step_tool_and_summary`<br>`test_shows_running_indicator_when_loading`<br>`test_hides_running_indicator_when_not_loading` |
+| Impact summary + copy | `ImpactSummary.jsx` | Component test | `test_shows_empty_state_null_result`<br>`test_copy_button_disabled_null_result`<br>`test_copy_button_enabled_with_result`<br>`test_renders_pr_title_and_url`<br>`test_renders_affected_components`<br>`test_copy_button_calls_onCopyMarkdown` |
+| Component card | `ComponentCard.jsx` | Component test | `test_renders_component_name_and_confidence`<br>`test_renders_files_changed`<br>`test_renders_risks_as_badges`<br>`test_renders_test_suggestions_sections`<br>`test_handles_empty_arrays` |
+| Knowledge graph | `KnowledgeGraph.jsx` | Component test (DOM-testable behavior only, no pixel/layout assertions) | `test_renders_cluster_filter_buttons`<br>`test_svg_has_aria_label`<br>`test_text_mode_hides_svg_shows_list`<br>`test_clicking_cluster_activates_it`<br>`test_clicking_active_cluster_deactivates`<br>`test_selected_only_shows_hint_without_cluster`<br>`test_renders_without_crashing_empty_data` |
+| SSE streaming + callbacks | `api.js` | Unit test (mock `global.fetch` with `ReadableStream`) | `test_indexRepo_fires_onIndexStep`<br>`test_indexRepo_fires_onIndexDone`<br>`test_indexRepo_fires_onError`<br>`test_indexRepo_throws_on_http_error`<br>`test_analyzePR_fires_onAgentStep`<br>`test_analyzePR_fires_onResult`<br>`test_getGraph_calls_correct_url` |
+| Mock API callbacks + abort | `mock/mockApi.js` | Unit test (`vi.useFakeTimers()`) | `test_mockIndexRepo_fires_onIndexStep_4_times`<br>`test_mockIndexRepo_fires_onIndexDone_correct_shape`<br>`test_mockIndexRepo_parses_owner_repo`<br>`test_mockIndexRepo_aborts_on_signal`<br>`test_mockAnalyzePR_fires_onAgentStep_5_times`<br>`test_mockAnalyzePR_fires_onResult`<br>`test_mockAnalyzePR_agent_steps_matches_count` |
+| Mock graph structure | `mock/mockGraphData.js` | Unit test (structural assertions) | `test_produces_10_clusters`<br>`test_all_file_nodes_have_valid_cluster_ref`<br>`test_all_edges_reference_existing_node_ids`<br>`test_node_ids_are_unique`<br>`test_cluster_sizes_match_file_counts` |
+| URL parsing + markdown | `App.jsx` | Unit test (pure functions — requires export) | `test_extractOwnerRepo_standard_url`<br>`test_extractOwnerRepo_strips_git_suffix`<br>`test_extractOwnerRepo_null_on_bad_url`<br>`test_extractOwnerRepo_null_single_segment`<br>`test_buildMarkdownReport_null_returns_empty`<br>`test_buildMarkdownReport_includes_pr_title`<br>`test_buildMarkdownReport_includes_all_components` |
