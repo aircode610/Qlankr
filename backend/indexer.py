@@ -218,73 +218,104 @@ async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
 async def _cypher_nodes(
     cypher_tool, repo_name: str
 ) -> tuple[list[GraphNode], list[GraphCluster]]:
-    """Fetch File nodes grouped by Community membership."""
+    """Fetch File nodes grouped by Community membership.
+
+    Join key is filePath — GitNexus uses filePath as the canonical file identifier.
+
+    Uses undirected MEMBER_OF matching (catches both relationship directions).
+    Communities with identical heuristicLabel are merged into one cluster.
+    Files with no community are grouped by top-level directory as a fallback.
+    """
     nodes: list[GraphNode] = []
-    file_cluster: dict[str, str] = {}    # file_id → community_id
+    file_cluster: dict[str, str] = {}    # filePath → community_id
     cluster_labels: dict[str, str] = {}  # community_id → label
 
-    # Step 1: file → community membership (2-hop: File → Symbol → Community)
-    # MEMBER_OF is on symbol nodes (Class/Function), not on File nodes directly.
+    # Step 1: file → community (undirected MEMBER_OF to handle both edge directions)
     try:
         raw = await cypher_tool.ainvoke({
             "query": (
-                "MATCH (f:File)-[:CodeRelation]->(s)-[r:CodeRelation]->(c:Community) "
+                "MATCH (f:File)-[:CodeRelation]->(s)-[r:CodeRelation]-(c:Community) "
                 "WHERE r.type = 'MEMBER_OF' "
-                "RETURN f.id AS file_id, c.id AS community_id, c.heuristicLabel AS community_label "
+                "RETURN f.filePath AS file_path, c.id AS community_id, c.heuristicLabel AS community_label "
+                "LIMIT 20000"
+            ),
+            "repo": repo_name,
+        })
+        vote: dict[str, dict[str, int]] = {}
+        for rec in _to_records(raw):
+            fp    = str(rec.get("file_path", "")).strip()
+            cid   = str(rec.get("community_id", "")).strip()
+            label = str(rec.get("community_label") or cid or "Unknown").strip()
+            if fp and cid:
+                vote.setdefault(fp, {})[cid] = vote.get(fp, {}).get(cid, 0) + 1
+                cluster_labels[cid] = label
+        for fp, counts in vote.items():
+            file_cluster[fp] = max(counts, key=lambda c: counts[c])
+        print(f"[indexer] membership rows: {len(file_cluster)}", flush=True)
+        if file_cluster:
+            sample = list(file_cluster.items())[:3]
+            print(f"[indexer] sample file_cluster keys: {sample}", flush=True)
+    except Exception as e:
+        print(f"[indexer] cypher membership error: {e}", flush=True)
+
+    # Merge communities that share the same heuristicLabel → one cluster per label
+    label_to_primary: dict[str, str] = {}
+    for cid, label in cluster_labels.items():
+        if label not in label_to_primary:
+            label_to_primary[label] = cid
+    cid_remap = {cid: label_to_primary[label] for cid, label in cluster_labels.items()}
+    file_cluster = {fp: cid_remap.get(cid, cid) for fp, cid in file_cluster.items()}
+    cluster_labels = {primary: label for label, primary in label_to_primary.items()}
+    print(f"[indexer] clusters after label-merge: {len(cluster_labels)}", flush=True)
+
+    # Step 2: all File nodes — explicit columns avoids RETURN f parsing quirks
+    try:
+        raw = await cypher_tool.ainvoke({
+            "query": (
+                "MATCH (f:File) "
+                "RETURN f.filePath AS filePath, f.name AS name, f.id AS id "
                 "LIMIT 5000"
             ),
             "repo": repo_name,
         })
-        # A file can have symbols in multiple communities — tally votes, pick dominant one
-        vote: dict[str, dict[str, int]] = {}  # file_id → {community_id → count}
-        for rec in _to_records(raw):
-            fid = str(rec.get("file_id", "")).strip()
-            cid = str(rec.get("community_id", "")).strip()
-            label = str(rec.get("community_label") or cid or "Unknown").strip()
-            if fid and cid:
-                vote.setdefault(fid, {})[cid] = vote.get(fid, {}).get(cid, 0) + 1
-                cluster_labels[cid] = label
-        for fid, counts in vote.items():
-            file_cluster[fid] = max(counts, key=lambda c: counts[c])
-        print(f"[indexer] membership rows: {len(file_cluster)}", flush=True)
-    except Exception as e:
-        print(f"[indexer] cypher membership error: {e}", flush=True)
+        rows = _to_records(raw)
+        if rows:
+            print(f"[indexer] sample file row: {rows[0]}", flush=True)
+        for rec in rows:
+            fp  = str(rec.get("filePath") or "").strip()
+            fid = str(rec.get("id")       or "").strip()
+            join_key = fp if fp in file_cluster else (fid if fid in file_cluster else fp or fid)
+            if not join_key:
+                continue
+            label = str(rec.get("name") or fp or fid).strip()
 
-    # Step 2: all File nodes
-    try:
-        raw = await cypher_tool.ainvoke({
-            "query": "MATCH (f:File) RETURN f LIMIT 1000",
-            "repo": repo_name,
-        })
-        for rec in _to_records(raw):
-            node_data = rec.get("f", rec)
-            if not isinstance(node_data, dict):
-                continue
-            fid = str(node_data.get("id", "")).strip()
-            if not fid:
-                continue
-            label = str(
-                node_data.get("name")
-                or node_data.get("filePath")
-                or node_data.get("path")
-                or fid
-            ).strip()
-            cluster_id = file_cluster.get(fid, "unclustered")
-            if cluster_id not in cluster_labels:
-                cluster_labels[cluster_id] = "Unclustered"
-            nodes.append(GraphNode(id=fid, label=label, type="file", cluster=cluster_id))
-        print(f"[indexer] file nodes: {len(nodes)}", flush=True)
+            if join_key in file_cluster:
+                cluster_id = file_cluster[join_key]
+            else:
+                # Fallback: group by top-level directory
+                parts = join_key.replace("\\", "/").strip("/").split("/")
+                dir_name = parts[0] if len(parts) > 1 else "root"
+                cluster_id = f"dir__{dir_name}"
+                if cluster_id not in cluster_labels:
+                    cluster_labels[cluster_id] = dir_name.capitalize()
+
+            nodes.append(GraphNode(id=join_key, label=label, type="file", cluster=cluster_id))
+
+        clustered   = sum(1 for n in nodes if not n.cluster.startswith("dir__") and n.cluster != "unclustered")
+        dir_grouped = sum(1 for n in nodes if n.cluster.startswith("dir__"))
+        print(f"[indexer] file nodes: {len(nodes)} total — {clustered} community, {dir_grouped} dir-grouped", flush=True)
     except Exception as e:
         print(f"[indexer] cypher file nodes error: {e}", flush=True)
 
-    # Build cluster list with sizes
+    # Only emit clusters that have at least one file
     size_map: dict[str, int] = {}
     for n in nodes:
         size_map[n.cluster] = size_map.get(n.cluster, 0) + 1
 
     clusters = [
-        GraphCluster(id=cid, label=cluster_labels[cid], size=size_map.get(cid, 0))
+        GraphCluster(id=cid, label=cluster_labels[cid], size=size_map[cid])
         for cid in cluster_labels
+        if size_map.get(cid, 0) > 0
     ]
     return nodes, clusters
 
@@ -293,6 +324,7 @@ async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
     """Fetch IMPORTS edges between File nodes.
     Note: CALLS exists only at symbol level, not file level — IMPORTS is the only
     file-to-file edge type in the GitNexus schema.
+    Uses filePath as source/target to match node IDs from _cypher_nodes.
     """
     edges: list[GraphEdge] = []
     for rel_type in ("IMPORTS",):
@@ -301,8 +333,8 @@ async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
                 "query": (
                     f"MATCH (a:File)-[r:CodeRelation]->(b:File) "
                     f"WHERE r.type = '{rel_type}' "
-                    f"RETURN a.id AS source, b.id AS target "
-                    f"LIMIT 1000"
+                    f"RETURN a.filePath AS source, b.filePath AS target "
+                    f"LIMIT 3000"
                 ),
                 "repo": repo_name,
             })
