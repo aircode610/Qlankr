@@ -146,16 +146,6 @@ function runForceLayout(nodeList, edgeList, width, height) {
   return pos
 }
 
-const CLUSTER_PALETTE = [
-  { stroke: "rgba(34,211,238,0.45)",  node: "rgba(34,211,238,0.2)",  nodeBorder: "rgba(34,211,238,0.8)",  dot: "rgba(34,211,238,0.85)",  dotBorder: "rgba(165,243,252,0.9)",  text: "rgb(207,250,254)" },
-  { stroke: "rgba(167,139,250,0.45)", node: "rgba(167,139,250,0.2)", nodeBorder: "rgba(167,139,250,0.8)", dot: "rgba(167,139,250,0.85)", dotBorder: "rgba(221,214,254,0.9)", text: "rgb(237,233,254)" },
-  { stroke: "rgba(52,211,153,0.45)",  node: "rgba(52,211,153,0.2)",  nodeBorder: "rgba(52,211,153,0.8)",  dot: "rgba(52,211,153,0.85)",  dotBorder: "rgba(187,247,208,0.9)",  text: "rgb(209,250,229)" },
-  { stroke: "rgba(251,146,60,0.45)",  node: "rgba(251,146,60,0.2)",  nodeBorder: "rgba(251,146,60,0.8)",  dot: "rgba(251,146,60,0.85)",  dotBorder: "rgba(253,211,155,0.9)",  text: "rgb(254,243,199)" },
-  { stroke: "rgba(244,114,182,0.45)", node: "rgba(244,114,182,0.2)", nodeBorder: "rgba(244,114,182,0.8)", dot: "rgba(244,114,182,0.85)", dotBorder: "rgba(251,207,232,0.9)", text: "rgb(253,242,248)" },
-  { stroke: "rgba(56,189,248,0.45)",  node: "rgba(56,189,248,0.2)",  nodeBorder: "rgba(56,189,248,0.8)",  dot: "rgba(56,189,248,0.85)",  dotBorder: "rgba(186,230,253,0.9)",  text: "rgb(224,242,254)" },
-  { stroke: "rgba(234,179,8,0.45)",   node: "rgba(234,179,8,0.2)",   nodeBorder: "rgba(234,179,8,0.8)",   dot: "rgba(234,179,8,0.85)",   dotBorder: "rgba(253,240,138,0.9)",   text: "rgb(254,249,195)" },
-]
-
 export default function KnowledgeGraph({ graphData }) {
   const containerRef = useRef(null)
   const sigmaRef = useRef(null)
