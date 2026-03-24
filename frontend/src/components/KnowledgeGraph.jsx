@@ -146,11 +146,13 @@ function runForceLayout(nodeList, edgeList, width, height) {
   return pos
 }
 
-export default function KnowledgeGraph({ graphData }) {
+export default function KnowledgeGraph({ graphData, focusedFiles }) {
   const containerRef = useRef(null)
   const sigmaRef = useRef(null)
   const graphRef = useRef(null)
   const activeClusterRef = useRef(null)
+  const focusedFilesRef = useRef(null)      // Set<string> of file labels to highlight
+  const focusedClustersRef = useRef(null)   // Set<string> of cluster ids that own focused files
 
   const [activeCluster, setActiveCluster] = useState(null)
   const [hoveredNode, setHoveredNode] = useState(null) // { label, x, y }
@@ -251,9 +253,24 @@ export default function KnowledgeGraph({ graphData }) {
       labelGridCellSize: 120,
       allowInvalidContainer: true,
       nodeReducer: (node, data) => {
+        const fileSet = focusedFilesRef.current
+        const clusterSet = focusedClustersRef.current
+
+        // focusedFiles mode (from ImpactSummary) takes priority
+        if (fileSet && fileSet.size > 0) {
+          const isFile = data.nodeType === "file"
+          const isHub  = data.nodeType === "cluster"
+          const hit = isFile
+            ? fileSet.has(data.label) || [...fileSet].some(f => data.label?.endsWith(f) || f.endsWith(data.label))
+            : isHub && clusterSet?.has(data.cluster)
+          if (hit) return { ...data, highlighted: true, size: data.size * 1.5, zIndex: 1 }
+          return { ...data, color: "rgba(42,42,58,0.35)", borderColor: "rgba(42,42,58,0.2)", size: data.size * 0.5, label: "" }
+        }
+
+        // activeCluster mode (cluster pill clicks)
         const cluster = activeClusterRef.current
         if (!cluster) return { ...data, highlighted: false }
-        if (data.cluster === cluster || (data.nodeType === "cluster" && data.cluster === cluster)) {
+        if (data.cluster === cluster) {
           return { ...data, highlighted: true, size: data.size * 1.3 }
         }
         return {
@@ -265,6 +282,21 @@ export default function KnowledgeGraph({ graphData }) {
         }
       },
       edgeReducer: (edge, data) => {
+        const fileSet = focusedFilesRef.current
+        const clusterSet = focusedClustersRef.current
+
+        if (fileSet && fileSet.size > 0) {
+          const srcLabel = graph.getNodeAttribute(graph.source(edge), "label")
+          const tgtLabel = graph.getNodeAttribute(graph.target(edge), "label")
+          const srcCluster = graph.getNodeAttribute(graph.source(edge), "cluster")
+          const tgtCluster = graph.getNodeAttribute(graph.target(edge), "cluster")
+          const srcHit = fileSet.has(srcLabel) || (clusterSet?.has(srcCluster))
+          const tgtHit = fileSet.has(tgtLabel) || (clusterSet?.has(tgtCluster))
+          if (srcHit && tgtHit) return { ...data, color: "rgba(124,58,237,0.7)", size: 2.5 }
+          if (srcHit || tgtHit) return { ...data, color: "rgba(124,58,237,0.3)", size: 1.2 }
+          return { ...data, color: "rgba(42,42,58,0.1)", size: 0.4 }
+        }
+
         const cluster = activeClusterRef.current
         if (!cluster) return { ...data }
         const src = graph.getNodeAttribute(graph.source(edge), "cluster")
@@ -296,10 +328,12 @@ export default function KnowledgeGraph({ graphData }) {
       container.style.cursor = "default"
     })
 
-    // Click on empty canvas clears selection
+    // Click on empty canvas clears both selections
     renderer.on("clickStage", () => {
       setActiveCluster(null)
       activeClusterRef.current = null
+      focusedFilesRef.current = null
+      focusedClustersRef.current = null
       renderer.refresh()
     })
     return () => {
@@ -311,10 +345,57 @@ export default function KnowledgeGraph({ graphData }) {
   // Update reducers when activeCluster changes without rebuilding
   useEffect(() => {
     activeClusterRef.current = activeCluster
-    if (sigmaRef.current) {
-      sigmaRef.current.refresh()
-    }
+    if (sigmaRef.current) sigmaRef.current.refresh()
   }, [activeCluster])
+
+  // Sync focusedFiles prop → refs, refresh renderer, pan camera to matched nodes
+  useEffect(() => {
+    if (!focusedFiles || focusedFiles.length === 0) {
+      focusedFilesRef.current = null
+      focusedClustersRef.current = null
+      if (sigmaRef.current) sigmaRef.current.refresh()
+      return
+    }
+
+    const fileSet = new Set(focusedFiles)
+    focusedFilesRef.current = fileSet
+
+    // Compute which cluster hubs own at least one focused file
+    const clusterSet = new Set()
+    const positions = []
+    if (graphRef.current) {
+      graphRef.current.forEachNode((nodeId, attrs) => {
+        if (attrs.nodeType === "file") {
+          const hit = fileSet.has(attrs.label) ||
+            [...fileSet].some(f => attrs.label?.endsWith(f) || f.endsWith(attrs.label))
+          if (hit) {
+            clusterSet.add(attrs.cluster)
+            positions.push({ x: attrs.x, y: attrs.y })
+          }
+        }
+      })
+    }
+    focusedClustersRef.current = clusterSet
+
+    if (sigmaRef.current) sigmaRef.current.refresh()
+
+    // Animate camera to the centroid of matched nodes
+    if (positions.length > 0 && sigmaRef.current) {
+      const xs = positions.map(p => p.x)
+      const ys = positions.map(p => p.y)
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2
+      const cy = (Math.min(...ys) + Math.max(...ys)) / 2
+      // Compute a ratio that fits the spread of nodes into ~40% of screen
+      const spreadX = Math.max(1, Math.max(...xs) - Math.min(...xs))
+      const spreadY = Math.max(1, Math.max(...ys) - Math.min(...ys))
+      const spread = Math.max(spreadX, spreadY)
+      const targetRatio = Math.min(1, Math.max(0.15, spread / 300))
+      sigmaRef.current.getCamera().animate(
+        { x: cx, y: cy, ratio: targetRatio },
+        { duration: 650 },
+      )
+    }
+  }, [focusedFiles])
 
   const handleClusterClick = useCallback((clusterId) => {
     const next = activeCluster === clusterId ? null : clusterId
