@@ -96,6 +96,8 @@ export default function App() {
   const [agentSteps, setAgentSteps] = useState([])
   const [analysisResult, setAnalysisResult] = useState(null)
 
+  const [focusedFiles, setFocusedFiles] = useState(null)
+
   const [error, setError] = useState("")
   const mockEnabled = isMockSseEnabled()
 
@@ -240,7 +242,7 @@ export default function App() {
           indexedRepo={indexedRepo}
         />
 
-        <KnowledgeGraph graphData={graphData} />
+        <KnowledgeGraph graphData={graphData} focusedFiles={focusedFiles} />
 
         <PRInput
           prUrl={prUrl}
@@ -251,7 +253,14 @@ export default function App() {
 
         <AgentTrace steps={agentSteps} loading={analyzing} />
 
-        <ImpactSummary result={analysisResult} onCopyMarkdown={handleCopyMarkdown} />
+        <ImpactSummary
+          result={analysisResult}
+          onCopyMarkdown={handleCopyMarkdown}
+          focusedFiles={focusedFiles}
+          onFocusFiles={(files) => setFocusedFiles(prev =>
+            prev && prev.length === files.length && prev.every((f, i) => f === files[i]) ? null : files
+          )}
+        />
       </main>
     </div>
   )

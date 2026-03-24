@@ -1,7 +1,7 @@
 import { ClipboardCopy, Zap, ExternalLink } from "lucide-react"
 import ComponentCard from "./ComponentCard"
 
-export default function ImpactSummary({ result, onCopyMarkdown }) {
+export default function ImpactSummary({ result, onCopyMarkdown, focusedFiles, onFocusFiles }) {
   return (
     <section className="rounded-xl border border-border-default bg-surface overflow-hidden animate-slide-up">
       {/* Header */}
@@ -49,9 +49,18 @@ export default function ImpactSummary({ result, onCopyMarkdown }) {
               <p className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
                 Affected Components ({(result.affected_components || []).length})
               </p>
-              {(result.affected_components || []).map((item, idx) => (
-                <ComponentCard key={`${item.component}-${idx}`} item={item} />
-              ))}
+              {(result.affected_components || []).map((item, idx) => {
+                const isActive = focusedFiles &&
+                  item.files_changed?.some(f => focusedFiles.includes(f))
+                return (
+                  <ComponentCard
+                    key={`${item.component}-${idx}`}
+                    item={item}
+                    isActive={isActive}
+                    onFocusFiles={() => onFocusFiles(item.files_changed || [])}
+                  />
+                )
+              })}
             </div>
           </div>
         )}
