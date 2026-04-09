@@ -4,8 +4,7 @@
 **Depends on:** Dev C's models (rebase once merged)
 **Files owned:**
 - `backend/agent/agent.py` — rewrite from ReAct to StateGraph
-- `backend/agent/prompts.py` — 3-stage system prompt
-- `backend/agent/sessions.py` — NEW: session state store
+- `backend/agent/prompts.py` — co-owned with Dev B (you define stage structure; Dev B writes stage-specific prompt content)
 - `backend/agent/stages/__init__.py` — NEW
 - `backend/agent/stages/gather.py` — NEW: context gathering phase
 - `backend/agent/stages/unit.py` — NEW: unit test generation stage
@@ -16,6 +15,8 @@
 - `backend/models.py` — owned by Dev C, you import from it
 - `backend/agent/tools.py` — owned by Dev B, you call `get_mcp_client()` and use tool subsets
 - `backend/agent/prefetch.py` — co-owned with Dev B (they build it, you consume it)
+- `backend/agent/sessions.py` — owned by Dev C, you call `create_session()`, `get_session()`, `update_session()`
+- `backend/agent/prompts.py` — co-owned with Dev B, you define stage structure; import `BASE_PROMPT`, `GATHER_PROMPT`, etc.
 
 ---
 
@@ -270,51 +271,6 @@ def submit_node(state: AnalysisState) -> AnalysisState:
 
 ---
 
-## Session Management (`backend/agent/sessions.py`)
-
-```python
-from dataclasses import dataclass, field
-from datetime import datetime
-import uuid
-
-@dataclass
-class Session:
-    session_id: str
-    pr_url: str
-    created_at: datetime
-    current_stage: str = "gathering"
-    thread_id: str = ""               # LangGraph thread ID for checkpoint resume
-    intermediate_result: dict = field(default_factory=dict)
-
-    def to_status_dict(self) -> dict:
-        return {
-            "session_id": self.session_id,
-            "current_stage": self.current_stage,
-            "created_at": self.created_at.isoformat(),
-            "intermediate_result": self.intermediate_result,
-        }
-
-# In-memory store (no persistence for now)
-_sessions: dict[str, Session] = {}
-
-def create_session(pr_url: str) -> Session:
-    sid = uuid.uuid4().hex[:12]
-    session = Session(session_id=sid, pr_url=pr_url, created_at=datetime.utcnow())
-    _sessions[sid] = session
-    return session
-
-def get_session(session_id: str) -> Session | None:
-    return _sessions.get(session_id)
-
-def update_session(session_id: str, **kwargs) -> None:
-    session = _sessions.get(session_id)
-    if session:
-        for k, v in kwargs.items():
-            setattr(session, k, v)
-```
-
----
-
 ## run_agent() Entry Point (rewritten)
 
 ```python
@@ -361,36 +317,11 @@ async def run_agent(
 
 ---
 
-## Prompt Rewrite (`backend/agent/prompts.py`)
+## Prompt Structure (`backend/agent/prompts.py`)
 
-The system prompt needs a major rewrite. Key changes:
+**Owned by Dev B.** You define the structural requirements here; Dev B writes the actual prompt content.
 
-1. **Stage awareness:** The agent now gets a stage-specific prompt injected by each stage node, not one monolithic prompt
-2. **Base prompt:** Shared context about GitNexus, graph schema, and general rules
-3. **Stage prompts:** Each stage file (`unit.py`, `integration.py`, `e2e.py`) defines its own prompt addendum
-
-Structure:
-```python
-BASE_PROMPT = """You are Qlankr, an AI QA assistant for game studios...
-[environment, graph schema, general rules — keep from current prompt]
-"""
-
-GATHER_PROMPT = """## Current Stage: Context Gathering
-[specific instructions for gather stage]
-"""
-
-UNIT_PROMPT = """## Current Stage: Unit Test Generation
-[specific instructions — see stage details above]
-"""
-
-INTEGRATION_PROMPT = """## Current Stage: Integration Test Generation
-[specific instructions]
-"""
-
-E2E_PROMPT = """## Current Stage: E2E Test Planning
-[specific instructions]
-"""
-```
+Each stage node injects a stage-specific prompt addendum (e.g., `GATHER_PROMPT`, `UNIT_PROMPT`) on top of a shared `BASE_PROMPT`. Import these from `backend/agent/prompts.py` and pass them to the sub-agent for each stage.
 
 ---
 
@@ -401,11 +332,12 @@ E2E_PROMPT = """## Current Stage: E2E Test Planning
 - `prefetch_context(pr_url, repo_name)` — returns dict with `processes`, `stats`, `pr_data`
 - You filter tools per stage using tool name lists
 
-### From Dev C (models):
+### From Dev C (models + sessions):
 - Import all models from `backend/models.py`
 - `AnalyzeResponse`, `AffectedComponent`, `UnitTestSpec`, `IntegrationTestSpec`, `E2ETestPlan`
 - SSE events: `AgentStepEvent`, `StageChangeEvent`, `CheckpointEvent`, `ResultEvent`, `ErrorEvent`
 - `ContinueRequest` for checkpoint resume
+- Session helpers: `create_session()`, `get_session()`, `update_session()` from `backend/agent/sessions.py`
 
 ### To Dev D (frontend):
 - SSE event stream format (documented in Dev C's doc)
@@ -427,7 +359,6 @@ E2E_PROMPT = """## Current Stage: E2E Test Planning
 - [ ] `/continue` with `add_context` appends user context to state before resuming
 - [ ] `/continue` with `skip` jumps to the next stage without running current
 - [ ] `/continue` with `rerun` re-executes the current stage
-- [ ] Session state persists across checkpoint interactions
 - [ ] Per-stage budgets enforced (gather: 10, unit: 15, integration: 15, e2e: 20)
 - [ ] Per-stage timeouts enforced (gather: 60s, unit: 90s, integration: 90s, e2e: 120s)
 - [ ] Full pipeline completes on a real PR (Luanti or osu!) and produces valid output

@@ -52,7 +52,7 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 | Implement unit test stage | Dev A | models, MCP tools | `backend/agent/stages/unit.py` |
 | Implement integration test stage | Dev A | unit stage | `backend/agent/stages/integration.py` |
 | Implement E2E test plan stage | Dev A | integration stage | `backend/agent/stages/e2e.py` |
-| Update system prompt for 3-stage workflow | Dev A + Dev B | all stages | `backend/agent/prompts.py` |
+| Update system prompt for 3-stage workflow | Dev B | all stages | `backend/agent/prompts.py` |
 | Add Qlankr panels to GitNexus UI | Dev D | models (SSE events) | `PrAnalysisPanel`, `AgentTraceDrawer` |
 | 3-stage results view component | Dev D | models | `TestPipelineResults` |
 
@@ -60,7 +60,7 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 
 | Task | Owner | Depends on | Deliverable |
 |------|-------|------------|-------------|
-| Session state persistence | Dev A | StateGraph | `backend/agent/sessions.py` |
+| Session state persistence | Dev C | StateGraph | `backend/agent/sessions.py` |
 | Checkpoint events + /continue endpoint | Dev A + Dev C | sessions, models | checkpoint logic in agent + endpoint |
 | Stage-specific tool filtering | Dev A + Dev B | all stages | tool subsets per stage |
 | Per-stage budgets + timeouts | Dev A | stages | budget config |
@@ -74,7 +74,7 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 |------|-------|------------|-------------|
 | Test code generation in unit + integration stages | Dev A | stages working | `generated_code` field populated |
 | Test runner container spec | Dev B | — | `backend/runner/Dockerfile.runner` |
-| Container orchestration + executor | Dev B | runner container | `backend/runner/executor.py` |
+| Container orchestration + executor | Dev C | runner container | `backend/runner/executor.py` |
 | /run-tests endpoint + SSE stream | Dev C | executor | endpoint in `main.py` |
 | Test execution results UI | Dev D | SSE stream | `TestExecutionPanel` component |
 | Container cleanup + resource limits | Dev B | executor | cleanup logic |

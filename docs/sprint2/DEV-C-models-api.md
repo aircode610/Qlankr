@@ -5,6 +5,8 @@
 **Files owned:**
 - `backend/models.py` (primary ownership — canonical source of truth)
 - `backend/main.py` (endpoint signatures, routing, SSE wiring)
+- `backend/agent/sessions.py` — NEW: session state store
+- `backend/runner/executor.py` — NEW (Phase 4): container orchestration + SSE streaming
 
 ---
 
@@ -295,6 +297,53 @@ async def run_tests(req: RunTestsRequest):
 
 ---
 
+## Session Management (`backend/agent/sessions.py`)
+
+You own the session store. Dev A calls your helpers to create and update sessions; the API endpoints you own in `main.py` call `get_session()` directly.
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime
+import uuid
+
+@dataclass
+class Session:
+    session_id: str
+    pr_url: str
+    created_at: datetime
+    current_stage: str = "gathering"
+    thread_id: str = ""               # LangGraph thread ID for checkpoint resume
+    intermediate_result: dict = field(default_factory=dict)
+
+    def to_status_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "current_stage": self.current_stage,
+            "created_at": self.created_at.isoformat(),
+            "intermediate_result": self.intermediate_result,
+        }
+
+# In-memory store (no persistence for now)
+_sessions: dict[str, Session] = {}
+
+def create_session(pr_url: str) -> Session:
+    sid = uuid.uuid4().hex[:12]
+    session = Session(session_id=sid, pr_url=pr_url, created_at=datetime.utcnow())
+    _sessions[sid] = session
+    return session
+
+def get_session(session_id: str) -> Session | None:
+    return _sessions.get(session_id)
+
+def update_session(session_id: str, **kwargs) -> None:
+    session = _sessions.get(session_id)
+    if session:
+        for k, v in kwargs.items():
+            setattr(session, k, v)
+```
+
+---
+
 ## SSE Event Flow (what the frontend sees)
 
 ```
@@ -324,6 +373,69 @@ POST /analyze/abc/continue   { action: "add_context", additional_context: "users
 
 ---
 
+## Phase 4: Container Executor (`backend/runner/executor.py`)
+
+You own the orchestration layer that spins up the runner container (built by Dev B) and streams results back through the `/run-tests` endpoint you also own.
+
+```python
+import docker
+import json
+from backend.models import TestResult, TestRunEvent, TestRunDoneEvent
+from backend.agent.sessions import get_session
+
+async def execute_tests(session_id: str):
+    """
+    Spin up a runner container, stream test results, clean up.
+    Called by POST /run-tests endpoint.
+    """
+    session = get_session(session_id)
+    test_files = _collect_generated_tests(session)
+
+    client = docker.from_env()
+    container = client.containers.run(
+        "qlankr-test-runner:latest",
+        stdin_open=True,
+        detach=True,
+        mem_limit="512m",
+        cpu_period=100000,
+        cpu_quota=50000,  # 50% of one core
+        network_mode="none",  # no network access
+    )
+
+    try:
+        config = {
+            "repo_url": session.pr_url.rsplit("/pull/", 1)[0],
+            "commit_sha": "HEAD",  # TODO: get PR head SHA
+            "test_files": test_files,
+        }
+        container.exec_run(f"echo '{json.dumps(config)}' | python3 /usr/local/bin/run_tests.py")
+
+        totals = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0}
+        for line in container.logs(stream=True):
+            result = json.loads(line.decode())
+            test_result = TestResult(**result)
+            totals["total"] += 1
+            totals[test_result.status] = totals.get(test_result.status, 0) + 1
+            yield TestRunEvent(stage=result.get("stage", "unit"), result=test_result)
+
+        yield TestRunDoneEvent(**totals, duration_ms=0)  # TODO: track duration
+    finally:
+        container.stop(timeout=5)
+        container.remove(force=True)
+```
+
+Resource limits (enforced here, container image built by Dev B):
+
+| Limit | Value |
+|-------|-------|
+| Memory | 512 MB |
+| CPU | 50% of 1 core |
+| Timeout | 300 seconds |
+| Network | Disabled |
+| Disk | 1 GB |
+
+---
+
 ## Acceptance Criteria
 
 - [ ] All new Pydantic models validate correctly (write pytest tests for each)
@@ -333,6 +445,11 @@ POST /analyze/abc/continue   { action: "add_context", additional_context: "users
 - [ ] All SSE events serialize cleanly via `model_dump_json()`
 - [ ] Existing Sprint 1 endpoints (`/index`, `/graph`, `/health`, `/debug/*`) unchanged
 - [ ] Phase 4 test execution endpoints stubbed (return 501) until Phase 4 begins
+- [ ] `create_session()` / `get_session()` / `update_session()` work correctly (unit tests)
+- [ ] Session `to_status_dict()` returns correct fields
+- [ ] `execute_tests()` streams `TestRunEvent` per result and `TestRunDoneEvent` at completion
+- [ ] Container is destroyed after execution (even on error)
+- [ ] Memory/CPU/network limits enforced in container config
 
 ---
 
@@ -350,3 +467,12 @@ Add to `backend/tests/test_endpoints.py`:
 - `/analyze` with `context` field
 - `/analyze/{session_id}/continue` with valid/invalid session
 - `/analyze/{session_id}/status` 404 case
+
+Add to `backend/tests/test_sessions.py` (new):
+- `create_session()` generates unique IDs
+- `get_session()` returns None for unknown IDs
+- `update_session()` modifies only specified fields
+
+Add to `backend/tests/test_executor.py` (new, Phase 4):
+- Mock docker client, test `execute_tests()` streams events correctly
+- Test container cleanup on success and on exception

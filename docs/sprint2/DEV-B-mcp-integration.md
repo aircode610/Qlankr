@@ -5,9 +5,9 @@
 **Files owned:**
 - `backend/agent/tools.py` — MCP client setup, all 16 tools, transport config
 - `backend/agent/prefetch.py` — NEW: pre-fetch PR data + processes + stats before agent runs
+- `backend/agent/prompts.py` — NEW: stage-specific system prompts (co-owned with Dev A)
 - `backend/indexer.py` — update: `--embeddings` flag, process-aware indexing
 - `backend/runner/Dockerfile.runner` — NEW (Phase 4)
-- `backend/runner/executor.py` — NEW (Phase 4)
 - `backend/runner/run_tests.py` — NEW (Phase 4)
 
 **Shared files (coordinate with):**
@@ -336,58 +336,9 @@ def main():
         print(json.dumps(result), flush=True)
 ```
 
-### `backend/runner/executor.py`
+### Resource Limits
 
-Orchestrates container lifecycle from the backend:
-
-```python
-import asyncio
-import docker
-import json
-from models import TestResult, TestRunEvent, TestRunDoneEvent
-
-async def execute_tests(session_id: str) -> AsyncIterator[TestRunEvent | TestRunDoneEvent]:
-    """
-    Spin up a runner container, stream test results, clean up.
-    Called by POST /run-tests endpoint (Dev C's code).
-    """
-    session = get_session(session_id)
-    test_files = _collect_generated_tests(session)
-
-    client = docker.from_env()
-    container = client.containers.run(
-        "qlankr-test-runner:latest",
-        stdin_open=True,
-        detach=True,
-        mem_limit="512m",
-        cpu_period=100000,
-        cpu_quota=50000,  # 50% of one core
-        network_mode="none",  # no network access
-    )
-
-    try:
-        # Send config via stdin
-        config = {
-            "repo_url": session.pr_url.rsplit("/pull/", 1)[0],
-            "commit_sha": "HEAD",  # TODO: get PR head SHA
-            "test_files": test_files,
-        }
-        container.exec_run(f"echo '{json.dumps(config)}' | python3 /usr/local/bin/run_tests.py")
-
-        # Stream results
-        totals = {"total": 0, "passed": 0, "failed": 0, "errors": 0, "skipped": 0}
-        for line in container.logs(stream=True):
-            result = json.loads(line.decode())
-            test_result = TestResult(**result)
-            totals["total"] += 1
-            totals[test_result.status] = totals.get(test_result.status, 0) + 1
-            yield TestRunEvent(stage=result.get("stage", "unit"), result=test_result)
-
-        yield TestRunDoneEvent(**totals, duration_ms=0)  # TODO: track duration
-    finally:
-        container.stop(timeout=5)
-        container.remove(force=True)
-```
+`executor.py` is owned by Dev C (they own the `/run-tests` endpoint that calls it). Coordinate with Dev C on the container config interface so `executor.py` knows how to read test files from the session.
 
 ### Resource Limits
 
@@ -398,6 +349,48 @@ async def execute_tests(session_id: str) -> AsyncIterator[TestRunEvent | TestRun
 | Timeout | 300 seconds | Kill runaway tests |
 | Network | Disabled | Tests shouldn't make external calls |
 | Disk | 1 GB | Prevent filling host disk |
+
+---
+
+## Part 5: Stage Prompts (`backend/agent/prompts.py`)
+
+Dev A's stage nodes inject a stage-specific prompt on top of a shared base. You own this file because stage prompts mirror the tool subsets you define — the tools available in a stage dictate what the agent should be told to do.
+
+```python
+BASE_PROMPT = """You are Qlankr, an AI QA assistant for game studios.
+You have access to a GitNexus knowledge graph of the repository.
+[environment, graph schema, tool descriptions — adapt from current prompts.py]
+"""
+
+GATHER_PROMPT = """## Current Stage: Context Gathering
+Your goal is to pre-fetch all context the downstream stages need.
+Retrieve PR metadata, changed files, defined symbols, and process list.
+Budget: 10 tool calls. Do not analyse — only collect.
+"""
+
+UNIT_PROMPT = """## Current Stage: Unit Test Generation
+For each affected component, generate UnitTestSpec objects.
+Identify the function signature, 2-5 test cases (happy path, edge cases, errors),
+and which dependencies to mock. Output must conform to UnitTestSpec schema.
+Budget: 15 tool calls.
+"""
+
+INTEGRATION_PROMPT = """## Current Stage: Integration Test Generation
+Identify cross-module integration points via impact and context tools.
+For each module pair, generate IntegrationTestSpec objects.
+Rate risk based on blast radius. Do not guess module boundaries.
+Budget: 15 tool calls.
+"""
+
+E2E_PROMPT = """## Current Stage: E2E Test Planning
+Convert affected execution flows (processes) into user-facing test scenarios.
+Write clear preconditions, numbered steps, and expected outcomes.
+If user_context is provided, create a targeted regression test for that scenario.
+Budget: 20 tool calls.
+"""
+```
+
+Dev A imports these constants and passes them to the sub-agent for each stage. If you need to update a prompt, coordinate with Dev A so the stage logic stays consistent.
 
 ---
 
@@ -420,9 +413,13 @@ async def execute_tests(session_id: str) -> AsyncIterator[TestRunEvent | TestRun
 - [ ] Framework detection works for pytest, jest, and gtest
 - [ ] Generated test files are written to correct paths
 - [ ] Test results stream as JSON lines
-- [ ] Container is destroyed after execution
-- [ ] Memory/CPU/timeout limits enforced
+- [ ] Memory/CPU/timeout limits enforced (enforced by Dev C's executor, configured here)
 - [ ] Network disabled in container
+
+### Phase 1 (Prompts)
+- [ ] `prompts.py` exports `BASE_PROMPT`, `GATHER_PROMPT`, `UNIT_PROMPT`, `INTEGRATION_PROMPT`, `E2E_PROMPT`
+- [ ] Stage prompts reference only tools available in that stage's tool subset
+- [ ] Dev A can import and use prompts without modification
 
 ---
 
@@ -443,3 +440,7 @@ Add to `backend/tests/`:
 **`test_indexer_async.py`** (update):
 - Test that `--embeddings` flag is passed to subprocess
 - Test `"embeddings"` stage appears in SSE events
+
+**`test_prompts.py`** (new):
+- Test that all 5 prompt constants are exported and non-empty
+- Test that each stage prompt only references tools in its allowed subset
