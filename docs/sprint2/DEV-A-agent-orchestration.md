@@ -1,0 +1,434 @@
+# Dev A (Amirali): Agent Orchestration + Stages
+
+**Branch:** `amirali/agent-v2`
+**Depends on:** Dev C's models (rebase once merged)
+**Files owned:**
+- `backend/agent/agent.py` — rewrite from ReAct to StateGraph
+- `backend/agent/prompts.py` — 3-stage system prompt
+- `backend/agent/sessions.py` — NEW: session state store
+- `backend/agent/stages/__init__.py` — NEW
+- `backend/agent/stages/gather.py` — NEW: context gathering phase
+- `backend/agent/stages/unit.py` — NEW: unit test generation stage
+- `backend/agent/stages/integration.py` — NEW: integration test generation stage
+- `backend/agent/stages/e2e.py` — NEW: E2E test plan stage
+
+**Shared files (coordinate with):**
+- `backend/models.py` — owned by Dev C, you import from it
+- `backend/agent/tools.py` — owned by Dev B, you call `get_mcp_client()` and use tool subsets
+- `backend/agent/prefetch.py` — co-owned with Dev B (they build it, you consume it)
+
+---
+
+## Overview
+
+Replace the single `create_react_agent` ReAct loop with a LangGraph `StateGraph` that has 5 explicit nodes:
+
+```
+gather_context → unit_tests → [checkpoint] → integration_tests → [checkpoint] → e2e_planning → submit
+```
+
+Each stage is a sub-agent (its own ReAct loop with stage-specific tools and prompt) that writes results into shared state. Between stages, checkpoints pause execution and wait for user input via SSE.
+
+---
+
+## Architecture
+
+### State Schema
+
+```python
+from typing import TypedDict
+from langgraph.graph import MessagesState
+
+class AnalysisState(TypedDict):
+    # Input
+    pr_url: str
+    repo_name: str | None
+    user_context: str | None          # optional bug report / scenario
+    session_id: str
+
+    # Pre-fetched context (populated by gather stage)
+    pr_diff: str                      # full diff text
+    pr_files: list[str]               # list of changed file paths
+    pr_metadata: dict                 # title, author, description
+    processes: list[dict]             # GitNexus process list
+    repo_stats: dict                  # files, nodes, edges, communities
+
+    # Stage outputs (populated progressively)
+    affected_components: list[dict]   # AffectedComponent dicts with unit_tests
+    integration_tests: list[dict]     # IntegrationTestSpec dicts (added to components later)
+    e2e_test_plans: list[dict]        # E2ETestPlan dicts
+
+    # Orchestration
+    current_stage: str
+    tool_calls_used: int
+    messages: list                    # LangGraph message history (for sub-agents)
+```
+
+### StateGraph Definition
+
+```python
+from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
+
+def build_analysis_graph():
+    graph = StateGraph(AnalysisState)
+
+    graph.add_node("gather", gather_node)
+    graph.add_node("unit_tests", unit_tests_node)
+    graph.add_node("checkpoint_unit", checkpoint_node)
+    graph.add_node("integration_tests", integration_tests_node)
+    graph.add_node("checkpoint_integration", checkpoint_node)
+    graph.add_node("e2e_planning", e2e_planning_node)
+    graph.add_node("submit", submit_node)
+
+    graph.set_entry_point("gather")
+    graph.add_edge("gather", "unit_tests")
+    graph.add_edge("unit_tests", "checkpoint_unit")
+    graph.add_edge("checkpoint_unit", "integration_tests")
+    graph.add_edge("integration_tests", "checkpoint_integration")
+    graph.add_edge("checkpoint_integration", "e2e_planning")
+    graph.add_edge("e2e_planning", "submit")
+    graph.add_edge("submit", END)
+
+    return graph.compile(checkpointer=MemorySaver())
+```
+
+### Checkpoint Nodes
+
+Use LangGraph's `interrupt()` to pause the graph and emit a `CheckpointEvent` via SSE:
+
+```python
+from langgraph.types import interrupt
+
+def checkpoint_node(state: AnalysisState) -> AnalysisState:
+    stage = state["current_stage"]
+    # Build intermediate result from state so far
+    intermediate = _build_partial_result(state)
+
+    # This pauses the graph — the user must call /continue to resume
+    user_response = interrupt({
+        "stage_completed": stage,
+        "intermediate_result": intermediate,
+        "prompt": f"Stage '{stage}' complete. Review results and choose: approve / add_context / skip / rerun",
+    })
+
+    # user_response comes from the /continue endpoint
+    if user_response["action"] == "add_context":
+        state["user_context"] = (state.get("user_context") or "") + "\n" + user_response["additional_context"]
+
+    return state
+```
+
+---
+
+## Stage Details
+
+### Stage: gather_context (`backend/agent/stages/gather.py`)
+
+**Purpose:** Pre-fetch all context the other stages need, so they don't waste tool calls on basic info.
+
+**Tools available:** All GitHub MCP tools + `list_repos`, `cypher`
+
+**What it does:**
+1. Call `get_pull_request` to get PR metadata (title, description, author)
+2. Call `get_pull_request_files` to get the diff and changed file list
+3. Call `cypher` to find symbols defined in each changed file:
+   ```cypher
+   MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES' AND f.filePath='<path>'
+   RETURN s.name, labels(s) LIMIT 30
+   ```
+4. Fetch process list from pre-fetched data (via `prefetch.py`, provided by Dev B)
+5. Write all gathered data into state
+
+**Budget:** 10 tool calls max
+**Timeout:** 60 seconds
+
+**Output into state:**
+- `pr_diff`, `pr_files`, `pr_metadata`
+- `processes` (from prefetch)
+- `repo_stats` (from prefetch)
+- Initial `affected_components` list (component names + files, no tests yet)
+
+### Stage: unit_tests (`backend/agent/stages/unit.py`)
+
+**Purpose:** For each affected component, generate unit test specifications.
+
+**Tools available:** `context`, `cypher`, `get_file_contents`
+
+**What it does:**
+1. For each affected component from gather stage:
+   a. Use `context` on changed symbols to understand their interface (params, return types, dependencies)
+   b. Use `get_file_contents` to read the actual function code if needed
+   c. Generate `UnitTestSpec` objects: target symbol, test cases, mock dependencies, priority
+2. Use a sub-agent with a unit-test-specific prompt:
+
+```
+You are generating unit test specifications for QA. For each symbol:
+- Identify the function signature and what it does
+- List 2-5 test cases covering: happy path, edge cases, error conditions
+- Identify which dependencies should be mocked for isolation
+- Set priority based on risk (high if the symbol is heavily called, low if leaf)
+
+Output must conform to UnitTestSpec schema. Only reference symbols you found via tools.
+```
+
+3. Write `unit_tests` list into each `AffectedComponent` in state
+
+**Budget:** 15 tool calls max
+**Timeout:** 90 seconds
+
+**Output into state:**
+- Each `affected_components[i].unit_tests` populated with `UnitTestSpec` entries
+
+### Stage: integration_tests (`backend/agent/stages/integration.py`)
+
+**Purpose:** Find cross-module integration points and generate integration test specs.
+
+**Tools available:** `impact`, `context`, `query`, `cypher`
+
+**What it does:**
+1. For each changed symbol identified in gather stage:
+   a. Use `impact` to get blast radius — which other symbols/modules depend on it
+   b. Use `context` to map caller/callee chains crossing module boundaries
+   c. Use `query` (semantic search) to find related execution flows
+2. Group integration points by module pair (e.g., "inventory <> crafting")
+3. For each integration point, generate `IntegrationTestSpec`:
+   - What modules are involved
+   - Test cases for the interaction (data flow, error propagation, state consistency)
+   - Data setup requirements
+   - Risk level based on blast radius depth
+
+Sub-agent prompt focus:
+```
+You are identifying integration risks between modules. For each pair of modules
+that interact through a changed symbol:
+- Describe the integration surface (what data/events cross the boundary)
+- Generate 2-4 test cases that verify the integration still works
+- Specify what test data/fixtures are needed
+- Rate risk: CRITICAL if the integration is in a hot path, LOW if rarely triggered
+
+Use impact and context tools to ground every claim. Do not guess module boundaries.
+```
+
+**Budget:** 15 tool calls max
+**Timeout:** 90 seconds
+
+**Output into state:**
+- Each `affected_components[i].integration_tests` populated
+- Cross-component integration specs added
+
+### Stage: e2e_planning (`backend/agent/stages/e2e.py`)
+
+**Purpose:** Map affected processes to user-facing E2E test scenarios.
+
+**Tools available:** `impact`, `query`, process resource URIs, `cypher`
+
+**What it does:**
+1. From the `processes` list in state, filter to processes affected by the PR
+   (use `impact` affected_processes or match process steps to changed symbols)
+2. For each affected process, fetch the full flow via process resource URI
+3. Translate the technical flow into a user-facing test scenario:
+   - Preconditions (game state, user role, etc.)
+   - Step-by-step actions and expected outcomes
+   - Which PR changes affect which steps
+4. If `user_context` is provided (bug report), trace that scenario through affected processes
+   and create a focused regression test plan
+5. Prioritize: CRITICAL if the process is a core game loop, LOW if administrative
+
+Sub-agent prompt focus:
+```
+You are writing E2E test plans for a QA tester who will execute them manually.
+For each affected execution flow (process):
+- Convert technical steps into user-facing actions
+- Write clear preconditions (what state the game needs to be in)
+- For each step: what the tester does and what they should see
+- Flag which steps are affected by the PR and what could go wrong
+- Estimate how long the test takes to run manually
+
+If the user provided a bug report or scenario, create a targeted regression test
+that traces that specific scenario through the affected code paths.
+```
+
+**Budget:** 20 tool calls max
+**Timeout:** 120 seconds
+
+**Output into state:**
+- `e2e_test_plans` populated with `E2ETestPlan` entries
+
+### Stage: submit
+
+**Purpose:** Assemble final `AnalyzeResponse` from state and yield `ResultEvent`.
+
+No tool calls. Pure assembly:
+```python
+def submit_node(state: AnalysisState) -> AnalysisState:
+    # Validate all components have required fields
+    # Build AnalyzeResponse from state
+    # The run_agent() wrapper yields this as a ResultEvent
+    return state
+```
+
+---
+
+## Session Management (`backend/agent/sessions.py`)
+
+```python
+from dataclasses import dataclass, field
+from datetime import datetime
+import uuid
+
+@dataclass
+class Session:
+    session_id: str
+    pr_url: str
+    created_at: datetime
+    current_stage: str = "gathering"
+    thread_id: str = ""               # LangGraph thread ID for checkpoint resume
+    intermediate_result: dict = field(default_factory=dict)
+
+    def to_status_dict(self) -> dict:
+        return {
+            "session_id": self.session_id,
+            "current_stage": self.current_stage,
+            "created_at": self.created_at.isoformat(),
+            "intermediate_result": self.intermediate_result,
+        }
+
+# In-memory store (no persistence for now)
+_sessions: dict[str, Session] = {}
+
+def create_session(pr_url: str) -> Session:
+    sid = uuid.uuid4().hex[:12]
+    session = Session(session_id=sid, pr_url=pr_url, created_at=datetime.utcnow())
+    _sessions[sid] = session
+    return session
+
+def get_session(session_id: str) -> Session | None:
+    return _sessions.get(session_id)
+
+def update_session(session_id: str, **kwargs) -> None:
+    session = _sessions.get(session_id)
+    if session:
+        for k, v in kwargs.items():
+            setattr(session, k, v)
+```
+
+---
+
+## run_agent() Entry Point (rewritten)
+
+```python
+async def run_agent(
+    pr_url: str,
+    context: str | None = None,
+    session_id: str | None = None,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
+    """
+    Entry point. Builds the StateGraph, runs it, yields SSE events.
+    If session_id is provided, resumes from checkpoint.
+    """
+    if session_id:
+        session = get_session(session_id)
+        # Resume existing graph from checkpoint
+        ...
+    else:
+        session = create_session(pr_url)
+        # Start new graph
+        ...
+
+    # Pre-fetch (calls Dev B's prefetch module)
+    prefetched = await prefetch_context(pr_url, repo_name)
+
+    initial_state = AnalysisState(
+        pr_url=pr_url,
+        repo_name=repo_name,
+        user_context=context,
+        session_id=session.session_id,
+        processes=prefetched["processes"],
+        repo_stats=prefetched["stats"],
+        # ... other fields
+    )
+
+    graph = build_analysis_graph()
+
+    async for event in graph.astream_events(initial_state, ...):
+        # Map LangGraph events to our SSE events
+        # Yield StageChangeEvent on node transitions
+        # Yield AgentStepEvent on tool calls
+        # Yield CheckpointEvent on interrupts
+        ...
+```
+
+---
+
+## Prompt Rewrite (`backend/agent/prompts.py`)
+
+The system prompt needs a major rewrite. Key changes:
+
+1. **Stage awareness:** The agent now gets a stage-specific prompt injected by each stage node, not one monolithic prompt
+2. **Base prompt:** Shared context about GitNexus, graph schema, and general rules
+3. **Stage prompts:** Each stage file (`unit.py`, `integration.py`, `e2e.py`) defines its own prompt addendum
+
+Structure:
+```python
+BASE_PROMPT = """You are Qlankr, an AI QA assistant for game studios...
+[environment, graph schema, general rules — keep from current prompt]
+"""
+
+GATHER_PROMPT = """## Current Stage: Context Gathering
+[specific instructions for gather stage]
+"""
+
+UNIT_PROMPT = """## Current Stage: Unit Test Generation
+[specific instructions — see stage details above]
+"""
+
+INTEGRATION_PROMPT = """## Current Stage: Integration Test Generation
+[specific instructions]
+"""
+
+E2E_PROMPT = """## Current Stage: E2E Test Planning
+[specific instructions]
+"""
+```
+
+---
+
+## Interface with Other Devs
+
+### From Dev B (MCP tools):
+- `get_mcp_client()` — returns client with all 16 tools
+- `prefetch_context(pr_url, repo_name)` — returns dict with `processes`, `stats`, `pr_data`
+- You filter tools per stage using tool name lists
+
+### From Dev C (models):
+- Import all models from `backend/models.py`
+- `AnalyzeResponse`, `AffectedComponent`, `UnitTestSpec`, `IntegrationTestSpec`, `E2ETestPlan`
+- SSE events: `AgentStepEvent`, `StageChangeEvent`, `CheckpointEvent`, `ResultEvent`, `ErrorEvent`
+- `ContinueRequest` for checkpoint resume
+
+### To Dev D (frontend):
+- SSE event stream format (documented in Dev C's doc)
+- Checkpoint event triggers the `CheckpointDialog` in the UI
+- `session_id` is returned in checkpoint events for the frontend to use in `/continue` calls
+
+---
+
+## Acceptance Criteria
+
+- [ ] Agent runs as a multi-phase StateGraph with 5 nodes visible in LangSmith traces
+- [ ] Each stage only calls tools from its allowed subset
+- [ ] Gather stage pre-populates state with PR data, symbols, and processes
+- [ ] Unit stage produces `UnitTestSpec` for every changed symbol found by gather
+- [ ] Integration stage produces `IntegrationTestSpec` for cross-module interactions
+- [ ] E2E stage produces `E2ETestPlan` for affected processes
+- [ ] Checkpoints pause the graph and emit `CheckpointEvent` via SSE
+- [ ] `/continue` with `approve` resumes the next stage
+- [ ] `/continue` with `add_context` appends user context to state before resuming
+- [ ] `/continue` with `skip` jumps to the next stage without running current
+- [ ] `/continue` with `rerun` re-executes the current stage
+- [ ] Session state persists across checkpoint interactions
+- [ ] Per-stage budgets enforced (gather: 10, unit: 15, integration: 15, e2e: 20)
+- [ ] Per-stage timeouts enforced (gather: 60s, unit: 90s, integration: 90s, e2e: 120s)
+- [ ] Full pipeline completes on a real PR (Luanti or osu!) and produces valid output
+- [ ] `submit_analysis` is no longer a tool — the submit node builds the response directly from state
