@@ -1,13 +1,13 @@
 import asyncio
 import re
 import sys
-from typing import AsyncIterator
+from typing import Annotated, Any, AsyncIterator
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
@@ -34,11 +34,41 @@ class _AnalysisResult(BaseModel):
     pr_title: str
     pr_url: str
     pr_summary: str
-    affected_components: list[AffectedComponent]
+    affected_components: Annotated[list[AffectedComponent], Field(min_length=1)]
 
 
-def _make_submit_tool() -> StructuredTool:
-    def submit_analysis(**kwargs) -> str:
+class _SubmitAnalysisToolArgs(BaseModel):
+    """Single `analysis` dict validated inside the tool so partial payloads become ToolMessages, not crashes."""
+
+    analysis: dict = Field(
+        description=(
+            "Complete analysis object. Required keys: pr_title (string), pr_url (string), "
+            "pr_summary (string), affected_components (non-empty array). "
+            "Each element of affected_components must have: component, impact_summary, confidence "
+            '("high"|"medium"|"low"); optional: files_changed, risks (arrays of strings), '
+            "test_suggestions with skip, run, deeper (arrays of strings, may be empty). "
+            "You may instead pass those keys at the top level of the tool input (without nesting under analysis)."
+        )
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_flat_or_nested(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "analysis" not in data:
+            return {"analysis": data}
+        return data
+
+
+def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
+    def submit_analysis(analysis: dict) -> str:
+        try:
+            parsed = _AnalysisResult.model_validate(analysis)
+        except Exception as e:
+            return (
+                "submit_analysis rejected — fix the payload and call submit_analysis again. "
+                f"Validation error: {e}"
+            )
+        result_holder.append(parsed)
         return "Analysis submitted."
 
     return StructuredTool.from_function(
@@ -46,10 +76,12 @@ def _make_submit_tool() -> StructuredTool:
         name="submit_analysis",
         description=(
             "Submit the completed QA impact analysis. "
-            "Call this exactly once when your analysis is complete. "
-            "This is your ONLY way to return the final result."
+            "Pass one argument: `analysis`, a single JSON object with pr_title, pr_url, pr_summary, "
+            "and affected_components (non-empty array of component objects). "
+            "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
+            "If you get a rejection message, correct the object and call again."
         ),
-        args_schema=_AnalysisResult,
+        args_schema=_SubmitAnalysisToolArgs,
     )
 
 
@@ -84,9 +116,10 @@ async def _run_agent_inner(
     client = get_mcp_client()
     mcp_tools = await client.get_tools()
 
+    submit_results: list[_AnalysisResult] = []
     agent = create_react_agent(
         model=_llm,
-        tools=mcp_tools + [_make_submit_tool()],
+        tools=mcp_tools + [_make_submit_tool(submit_results)],
         prompt=SystemMessage(content=SYSTEM_PROMPT),
     )
 
@@ -107,7 +140,6 @@ async def _run_agent_inner(
         )
 
     tool_call_count = 0
-    analysis_result: _AnalysisResult | None = None
 
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}{repo_context}")]},
@@ -120,19 +152,13 @@ async def _run_agent_inner(
         tool_name = event["name"]
         tool_input = event["data"].get("input", {})
 
-        if tool_name == "submit_analysis":
-            try:
-                analysis_result = _AnalysisResult.model_validate(tool_input)
-            except Exception as e:
-                yield ErrorEvent(message=f"submit_analysis validation failed: {e}")
-            break
-
         tool_call_count += 1
         yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
 
         if tool_call_count >= MAX_TOOL_CALLS:
             break
 
+    analysis_result = submit_results[-1] if submit_results else None
     if analysis_result is None:
         yield ErrorEvent(message="Agent did not submit an analysis result.")
         return
@@ -163,6 +189,7 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         "context": lambda i: f"Getting caller/callee context for: {i.get('name', '')}",
         "query": lambda i: f"Semantic search: {i.get('query', '')}",
         "cypher": lambda i: f"Graph query: {str(i.get('query', ''))[:60]}",
+        "submit_analysis": lambda i: "Submitting QA impact analysis",
     }
     try:
         builder = builders.get(tool_name)

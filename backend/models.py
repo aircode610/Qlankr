@@ -1,5 +1,6 @@
 from typing import Literal
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
@@ -7,17 +8,17 @@ class AnalyzeRequest(BaseModel):
 
 
 class TestSuggestions(BaseModel):
-    skip: list[str]
-    run: list[str]
-    deeper: list[str]
+    skip: list[str] = Field(default_factory=list)
+    run: list[str] = Field(default_factory=list)
+    deeper: list[str] = Field(default_factory=list)
 
 
 class AffectedComponent(BaseModel):
     component: str
-    files_changed: list[str]
+    files_changed: list[str] = Field(default_factory=list)
     impact_summary: str
-    risks: list[str]
-    test_suggestions: TestSuggestions
+    risks: list[str] = Field(default_factory=list)
+    test_suggestions: TestSuggestions = Field(default_factory=TestSuggestions)
     confidence: Literal["high", "medium", "low"]
 
 
