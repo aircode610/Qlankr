@@ -1,6 +1,6 @@
-# Dev A (Amirali): Agent Orchestration + Stages
+# Dev A (Danila): Agent Orchestration + Stages
 
-**Branch:** `amirali/agent-v2`
+**Branch:** ``
 **Depends on:** Dev C's models (rebase once merged)
 **Files owned:**
 - `backend/agent/agent.py` — rewrite from ReAct to StateGraph
@@ -22,13 +22,17 @@
 
 ## Overview
 
-Replace the single `create_react_agent` ReAct loop with a LangGraph `StateGraph` that has 5 explicit nodes:
+Replace the single `create_react_agent` ReAct loop with a LangGraph `StateGraph` that has 6 nodes:
 
 ```
-gather_context → unit_tests → [checkpoint] → integration_tests → [checkpoint] → e2e_planning → submit
+                                          ┌→ integration_tests ─┐
+gather_context → unit_tests → [checkpoint]─┤                     ├→ submit
+                                          └→ e2e_planning ───────┘
 ```
 
-Each stage is a sub-agent (its own ReAct loop with stage-specific tools and prompt) that writes results into shared state. Between stages, checkpoints pause execution and wait for user input via SSE.
+There is **one checkpoint** — after unit tests complete. The user reviews unit results and approves (or re-runs/adds context). Integration and E2E then run **in parallel** since they both work from gather output and don't depend on each other's results. This saves wall-clock time and avoids a second blocking checkpoint.
+
+Each stage is a sub-agent (its own ReAct loop with stage-specific tools and prompt) that writes results into shared state.
 
 ---
 
@@ -78,21 +82,31 @@ def build_analysis_graph():
     graph.add_node("unit_tests", unit_tests_node)
     graph.add_node("checkpoint_unit", checkpoint_node)
     graph.add_node("integration_tests", integration_tests_node)
-    graph.add_node("checkpoint_integration", checkpoint_node)
     graph.add_node("e2e_planning", e2e_planning_node)
     graph.add_node("submit", submit_node)
 
     graph.set_entry_point("gather")
     graph.add_edge("gather", "unit_tests")
     graph.add_edge("unit_tests", "checkpoint_unit")
+
+    # Fan-out: integration and e2e run in parallel after the checkpoint
     graph.add_edge("checkpoint_unit", "integration_tests")
-    graph.add_edge("integration_tests", "checkpoint_integration")
-    graph.add_edge("checkpoint_integration", "e2e_planning")
+    graph.add_edge("checkpoint_unit", "e2e_planning")
+
+    # Fan-in: submit waits for both to complete
+    graph.add_edge("integration_tests", "submit")
     graph.add_edge("e2e_planning", "submit")
+
     graph.add_edge("submit", END)
 
     return graph.compile(checkpointer=MemorySaver())
 ```
+
+**State field ownership (important for parallel nodes):**
+- `integration_tests` node writes to `affected_components[i].integration_tests`
+- `e2e_planning` node writes to `e2e_test_plans`
+
+These are different state fields so there's no write conflict when they run in parallel. Do not have either node touch the other's field.
 
 ### Checkpoint Nodes
 
@@ -183,6 +197,8 @@ Output must conform to UnitTestSpec schema. Only reference symbols you found via
 
 ### Stage: integration_tests (`backend/agent/stages/integration.py`)
 
+**Runs in parallel with e2e_planning** after the unit checkpoint. Works entirely from gather stage output — does not read unit test specs.
+
 **Purpose:** Find cross-module integration points and generate integration test specs.
 
 **Tools available:** `impact`, `context`, `query`, `cypher`
@@ -219,6 +235,8 @@ Use impact and context tools to ground every claim. Do not guess module boundari
 - Cross-component integration specs added
 
 ### Stage: e2e_planning (`backend/agent/stages/e2e.py`)
+
+**Runs in parallel with integration_tests** after the unit checkpoint. Works from `processes` and `affected_components` populated by gather — does not depend on integration test output.
 
 **Purpose:** Map affected processes to user-facing E2E test scenarios.
 
@@ -348,17 +366,20 @@ Each stage node injects a stage-specific prompt addendum (e.g., `GATHER_PROMPT`,
 
 ## Acceptance Criteria
 
-- [ ] Agent runs as a multi-phase StateGraph with 5 nodes visible in LangSmith traces
+- [ ] Agent runs as a StateGraph with 6 nodes visible in LangSmith traces (gather, unit_tests, checkpoint_unit, integration_tests, e2e_planning, submit)
 - [ ] Each stage only calls tools from its allowed subset
 - [ ] Gather stage pre-populates state with PR data, symbols, and processes
 - [ ] Unit stage produces `UnitTestSpec` for every changed symbol found by gather
+- [ ] Integration and E2E stages run in parallel after the unit checkpoint
+- [ ] Integration stage writes only to `affected_components[i].integration_tests` (no overlap with E2E)
+- [ ] E2E stage writes only to `e2e_test_plans` (no overlap with integration)
 - [ ] Integration stage produces `IntegrationTestSpec` for cross-module interactions
 - [ ] E2E stage produces `E2ETestPlan` for affected processes
-- [ ] Checkpoints pause the graph and emit `CheckpointEvent` via SSE
-- [ ] `/continue` with `approve` resumes the next stage
-- [ ] `/continue` with `add_context` appends user context to state before resuming
-- [ ] `/continue` with `skip` jumps to the next stage without running current
-- [ ] `/continue` with `rerun` re-executes the current stage
+- [ ] Single checkpoint (after unit) pauses the graph and emits `CheckpointEvent` via SSE
+- [ ] `/continue` with `approve` launches integration + e2e in parallel
+- [ ] `/continue` with `add_context` appends user context to state, then launches integration + e2e in parallel
+- [ ] `/continue` with `rerun` re-executes the unit stage
+- [ ] `/continue` with `skip` goes straight to submit (skips both integration and e2e)
 - [ ] Per-stage budgets enforced (gather: 10, unit: 15, integration: 15, e2e: 20)
 - [ ] Per-stage timeouts enforced (gather: 60s, unit: 90s, integration: 90s, e2e: 120s)
 - [ ] Full pipeline completes on a real PR (Luanti or osu!) and produces valid output

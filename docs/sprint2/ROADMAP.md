@@ -10,7 +10,7 @@
 
 | Dev | Role | Branch | Workstream |
 |-----|------|--------|------------|
-| **Dev A — Amirali** | Agent architect | `amirali/agent-v2` | Agent StateGraph rewrite, session management, orchestration |
+| **Dev A** | Agent architect | `/agent-v2` | Agent StateGraph rewrite, session management, orchestration |
 | **Dev B** | Backend / MCP | `devb/mcp-tools` | GitNexus MCP integration, embeddings, process resources, prefetch |
 | **Dev C** | Backend / Models | `devc/testing-models` | Shared Pydantic models, API endpoints, SSE events, submit_analysis schema |
 | **Dev D** | Frontend | `devd/gitnexus-ui` | GitNexus UI integration, Qlankr panels, results view, checkpoint dialog |
@@ -50,8 +50,8 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 |------|-------|------------|-------------|
 | Implement gather stage + prefetch | Dev A + Dev B | Phase 1 | `backend/agent/stages/gather.py`, `backend/agent/prefetch.py` |
 | Implement unit test stage | Dev A | models, MCP tools | `backend/agent/stages/unit.py` |
-| Implement integration test stage | Dev A | unit stage | `backend/agent/stages/integration.py` |
-| Implement E2E test plan stage | Dev A | integration stage | `backend/agent/stages/e2e.py` |
+| Implement integration test stage | Dev A | unit stage checkpoint | `backend/agent/stages/integration.py` |
+| Implement E2E test plan stage | Dev A | unit stage checkpoint (parallel with integration) | `backend/agent/stages/e2e.py` |
 | Update system prompt for 3-stage workflow | Dev B | all stages | `backend/agent/prompts.py` |
 | Add Qlankr panels to GitNexus UI | Dev D | models (SSE events) | `PrAnalysisPanel`, `AgentTraceDrawer` |
 | 3-stage results view component | Dev D | models | `TestPipelineResults` |
@@ -61,7 +61,7 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 | Task | Owner | Depends on | Deliverable |
 |------|-------|------------|-------------|
 | Session state persistence | Dev C | StateGraph | `backend/agent/sessions.py` |
-| Checkpoint events + /continue endpoint | Dev A + Dev C | sessions, models | checkpoint logic in agent + endpoint |
+| Single checkpoint (after unit) + /continue endpoint | Dev A + Dev C | sessions, models | checkpoint logic in agent + endpoint |
 | Stage-specific tool filtering | Dev A + Dev B | all stages | tool subsets per stage |
 | Per-stage budgets + timeouts | Dev A | stages | budget config |
 | Checkpoint dialog UI | Dev D | checkpoint events | `CheckpointDialog` component |
@@ -99,7 +99,7 @@ All four devs start in parallel. Dev C's models land first (day 1-2) so others c
 |------|------|-----|
 | End of Phase 1 | Models compile, endpoints return 422 stubs, MCP tools list, UI builds | All |
 | End of Phase 2 | Full analysis runs with 3-stage output on a test PR (Luanti or osu!) | Dev A + B |
-| End of Phase 3 | Human-in-the-loop works end-to-end through the UI | All |
+| End of Phase 3 | Single checkpoint after unit tests works end-to-end; integration + e2e run in parallel after approval | All |
 | End of Phase 4 | Generated tests run in container, results stream to UI | All |
 
 ---
