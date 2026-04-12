@@ -3,6 +3,7 @@ import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { GraphCanvas, GraphCanvasHandle } from './components/GraphCanvas';
 import { FileTreePanel } from './components/FileTreePanel';
 import { StatusBar } from './components/StatusBar';
+import { Navbar, AppView } from './components/Navbar';
 import { IndexingPage } from './components/IndexingPage';
 import { PrAnalysisPanel } from './components/PrAnalysisPanel';
 import { AgentTraceDrawer } from './components/AgentTraceDrawer';
@@ -12,7 +13,13 @@ import { createKnowledgeGraph } from './core/graph/graph';
 import { indexRepo, analyzePR, continueAnalysis, getGraph } from './services/api';
 import type { AnalysisStage, CheckpointData, AnalyzeResult, WorkflowId } from './services/types';
 
-// ── Error boundary — prevents entire UI going black on render errors ──
+const WORKFLOW_LABELS: Record<WorkflowId, string> = {
+  unit_tests: 'Unit Tests',
+  integration_tests: 'Integration Tests',
+  e2e_planning: 'E2E Planning',
+};
+
+// ── Error boundary ────────────────────────────────────────────────────────────
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null };
   static getDerivedStateFromError(err: unknown) {
@@ -23,8 +30,13 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
       return (
         <div className="flex h-full flex-col items-center justify-center gap-3 bg-void p-8 text-center">
           <p className="text-sm font-medium text-red-400">Something went wrong</p>
-          <pre className="max-w-lg overflow-auto rounded bg-elevated p-3 text-left text-[11px] text-text-muted">{this.state.error}</pre>
-          <button onClick={() => this.setState({ error: null })} className="rounded bg-accent px-4 py-2 text-sm text-white hover:bg-accent-dim">
+          <pre className="max-w-lg overflow-auto rounded bg-elevated p-3 text-left text-[11px] text-text-muted">
+            {this.state.error}
+          </pre>
+          <button
+            onClick={() => this.setState({ error: null })}
+            className="rounded bg-accent px-4 py-2 text-sm text-white hover:bg-accent-dim"
+          >
             Retry
           </button>
         </div>
@@ -34,10 +46,11 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
   }
 }
 
+// ── Main app content ──────────────────────────────────────────────────────────
 const AppContent = () => {
   const {
     graph, setGraph,
-    setRepoUrl,
+    repoUrl, setRepoUrl,
     indexing, setIndexing,
     indexed, setIndexed,
     indexMessages, setIndexMessages,
@@ -49,11 +62,11 @@ const AppContent = () => {
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Show main workspace only after a brief delay once indexing completes,
-  // so the user sees the "Indexing complete" state on the landing page.
   const [showWorkspace, setShowWorkspace] = useState(false);
+  const [view, setView] = useState<AppView>('graph');
   const [indexError, setIndexError] = useState<string | null>(null);
 
+  // Transition to workspace ~900ms after indexing completes
   useEffect(() => {
     if (indexed) {
       const t = setTimeout(() => setShowWorkspace(true), 900);
@@ -61,7 +74,13 @@ const AppContent = () => {
     }
   }, [indexed]);
 
-  /* ── Repo indexing ─────────────────────────────────────────── */
+  // Switch to Analyze view automatically when a workflow starts
+  const { analyzing, agentSteps, currentStage, checkpoint, result, error, activeWorkflow } = analysisState;
+  useEffect(() => {
+    if (analyzing) setView('analyze');
+  }, [analyzing]);
+
+  /* ── Repo indexing ──────────────────────────────────────────── */
   const handleIndex = useCallback(async (url: string) => {
     setRepoUrl(url);
     setIndexing(true);
@@ -77,8 +96,6 @@ const AppContent = () => {
         onIndexDone: async (data) => {
           setIndexed(true);
           setProgress({ phase: 'complete', percent: 100, message: `Indexed ${data.files} files` });
-
-          // Fetch and load the knowledge graph
           try {
             const [owner, repo] = data.repo.split('/');
             const { nodes, relationships } = await getGraph(owner, repo);
@@ -98,13 +115,13 @@ const AppContent = () => {
         },
       });
     } catch {
-      // error handled by onError callback
+      // handled by onError
     } finally {
       setIndexing(false);
     }
   }, [setRepoUrl, setIndexing, setIndexMessages, setProgress, setIndexed, setGraph]);
 
-  /* ── PR analysis ───────────────────────────────────────────── */
+  /* ── PR analysis ────────────────────────────────────────────── */
   const handleAnalyze = useCallback(async (prUrl: string, context: string | null, workflow: WorkflowId) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
@@ -130,7 +147,10 @@ const AppContent = () => {
         onAgentStep: (data) => {
           setAnalysisState((prev) => ({
             ...prev,
-            agentSteps: [...prev.agentSteps, { tool: data.tool, summary: data.summary, stage: prev.currentStage }],
+            agentSteps: [
+              ...prev.agentSteps,
+              { tool: data.tool, summary: data.summary, stage: prev.currentStage },
+            ],
           }));
         },
         onStageChange: (data) => {
@@ -145,19 +165,16 @@ const AppContent = () => {
           }));
         },
         onResult: (data) => {
-          const result = data as AnalyzeResult;
-          const allFiles = result.affected_components.flatMap((c) => c.files_changed);
-          setAnalysisState((prev) => ({
-            ...prev,
-            analyzing: false,
-            result,
-            currentStage: null,
-          }));
+          const res = data as AnalyzeResult;
+          const allFiles = res.affected_components.flatMap((c) => c.files_changed);
+          setAnalysisState((prev) => ({ ...prev, analyzing: false, result: res, currentStage: null }));
           if (graph && allFiles.length > 0) {
-            const fileIds = new Set(
-              graph.nodes.filter((n) => allFiles.some((f) => n.properties.filePath.endsWith(f))).map((n) => n.id)
+            const ids = new Set(
+              graph.nodes
+                .filter((n) => allFiles.some((f) => n.properties.filePath.endsWith(f)))
+                .map((n) => n.id)
             );
-            setAffectedFileIds(fileIds);
+            setAffectedFileIds(ids);
           }
         },
         onError: (msg) => {
@@ -189,7 +206,10 @@ const AppContent = () => {
         onAgentStep: (data) => {
           setAnalysisState((prev) => ({
             ...prev,
-            agentSteps: [...prev.agentSteps, { tool: data.tool, summary: data.summary, stage: prev.currentStage }],
+            agentSteps: [
+              ...prev.agentSteps,
+              { tool: data.tool, summary: data.summary, stage: prev.currentStage },
+            ],
           }));
         },
         onStageChange: (data) => {
@@ -199,14 +219,16 @@ const AppContent = () => {
           setAnalysisState((prev) => ({ ...prev, analyzing: false, checkpoint: data as CheckpointData }));
         },
         onResult: (data) => {
-          const result = data as AnalyzeResult;
-          const allFiles = result.affected_components.flatMap((c) => c.files_changed);
-          setAnalysisState((prev) => ({ ...prev, analyzing: false, result, currentStage: null }));
+          const res = data as AnalyzeResult;
+          const allFiles = res.affected_components.flatMap((c) => c.files_changed);
+          setAnalysisState((prev) => ({ ...prev, analyzing: false, result: res, currentStage: null }));
           if (graph && allFiles.length > 0) {
-            const fileIds = new Set(
-              graph.nodes.filter((n) => allFiles.some((f) => n.properties.filePath.endsWith(f))).map((n) => n.id)
+            const ids = new Set(
+              graph.nodes
+                .filter((n) => allFiles.some((f) => n.properties.filePath.endsWith(f)))
+                .map((n) => n.id)
             );
-            setAffectedFileIds(fileIds);
+            setAffectedFileIds(ids);
           }
         },
         onError: (msg) => {
@@ -230,9 +252,7 @@ const AppContent = () => {
     setAffectedFileIds(ids);
   }, [graph, setAffectedFileIds]);
 
-  const { analyzing, agentSteps, currentStage, checkpoint, result, error, activeWorkflow } = analysisState;
-
-  // ── Indexing / landing screen ────────────────────────────────
+  // ── Landing / indexing screen ────────────────────────────────
   if (!showWorkspace) {
     return (
       <IndexingPage
@@ -245,31 +265,46 @@ const AppContent = () => {
     );
   }
 
-  // ── Main workspace ───────────────────────────────────────────
+  // Derive a short repo name for the navbar badge
+  const repoName = repoUrl
+    ? repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+    : null;
+
+  // ── Workspace ────────────────────────────────────────────────
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-void">
-      <main className="flex min-h-0 flex-1">
+      <Navbar
+        view={view}
+        onViewChange={setView}
+        repoName={repoName}
+        analyzing={analyzing}
+        activeWorkflowLabel={activeWorkflow ? WORKFLOW_LABELS[activeWorkflow] : null}
+      />
 
-        {/* Left — file tree */}
-        <FileTreePanel onFocusNode={handleFocusNode} />
-
-        {/* Centre — graph canvas */}
-        <div className="relative min-w-0 flex-1">
-          {graph ? (
-            <GraphCanvas ref={graphCanvasRef} />
-          ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-4 bg-void">
-              <div className="animate-breathe rounded-full border-2 border-accent/30 p-6">
-                <div className="h-16 w-16 rounded-full bg-gradient-to-br from-accent/30 to-accent/5" />
+      {/* ── Graph view ── */}
+      {view === 'graph' && (
+        <main className="flex min-h-0 flex-1">
+          <FileTreePanel onFocusNode={handleFocusNode} />
+          <div className="relative min-w-0 flex-1">
+            {graph ? (
+              <GraphCanvas ref={graphCanvasRef} />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-4 bg-void">
+                <div className="animate-breathe rounded-full border-2 border-accent/30 p-6">
+                  <div className="h-16 w-16 rounded-full bg-gradient-to-br from-accent/30 to-accent/5" />
+                </div>
+                <p className="text-sm text-text-muted">Loading knowledge graph…</p>
               </div>
-              <p className="text-sm text-text-muted">Loading knowledge graph…</p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        </main>
+      )}
 
-        {/* Right — workflow panel */}
-        <div className="flex w-80 flex-col border-l border-border-subtle bg-surface">
-          <div className="flex flex-col gap-3 border-b border-border-subtle p-4">
+      {/* ── Analyze view ── */}
+      {view === 'analyze' && (
+        <main className="flex min-h-0 flex-1 overflow-hidden">
+          {/* Left column — workflow picker */}
+          <div className="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border-subtle bg-surface p-6">
             <PrAnalysisPanel
               onAnalyze={handleAnalyze}
               analyzing={analyzing}
@@ -277,13 +312,14 @@ const AppContent = () => {
               disabled={false}
             />
             {error && (
-              <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+              <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2.5 text-xs text-red-400">
                 {error}
               </div>
             )}
           </div>
 
-          <div className="min-h-0 flex-1 overflow-hidden">
+          {/* Right column — trace / results */}
+          <div className="min-w-0 flex-1 overflow-hidden">
             {result ? (
               <TestPipelineResults result={result} onHighlightFiles={handleHighlightFiles} />
             ) : (
@@ -295,8 +331,8 @@ const AppContent = () => {
               />
             )}
           </div>
-        </div>
-      </main>
+        </main>
+      )}
 
       <StatusBar />
 
