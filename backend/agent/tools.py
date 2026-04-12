@@ -51,13 +51,20 @@ _STAGE_TOOLS: dict[str, set[str]] = {
 
 
 def _server_config() -> dict:
+    utf8_env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+    }
     return {
         "github": {
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-github"],
             "env": {
-                **os.environ,
+                **utf8_env,
                 # The GitHub MCP server expects GITHUB_PERSONAL_ACCESS_TOKEN
                 "GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_TOKEN", ""),
             },
@@ -66,7 +73,7 @@ def _server_config() -> dict:
             "transport": "stdio",
             "command": "gitnexus",
             "args": ["mcp"],
-            "env": {**os.environ},
+            "env": utf8_env,
         },
     }
 
