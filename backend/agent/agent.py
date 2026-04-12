@@ -1,6 +1,8 @@
 import asyncio
+import os
 import re
 import sys
+import traceback
 from typing import Annotated, Any, AsyncIterator
 
 from langchain_anthropic import ChatAnthropic
@@ -23,7 +25,13 @@ from models import (
 MAX_TOOL_CALLS = 25
 TIMEOUT_SECONDS = 180
 
-_llm = ChatAnthropic(model="claude-sonnet-4-6", temperature=0, max_tokens=4096)
+_llm = ChatAnthropic(
+    model="claude-sonnet-4-6",
+    temperature=0,
+    max_tokens=4096,
+    api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
+    base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+)
 
 
 # ── Submit tool schema ────────────────────────────────────────────────────────
@@ -65,7 +73,7 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
             parsed = _AnalysisResult.model_validate(analysis)
         except Exception as e:
             return (
-                "submit_analysis rejected — fix the payload and call submit_analysis again. "
+                "submit_analysis rejected ? fix the payload and call submit_analysis again. "
                 f"Validation error: {e}"
             )
         result_holder.append(parsed)
@@ -78,7 +86,7 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
             "Submit the completed QA impact analysis. "
             "Pass one argument: `analysis`, a single JSON object with pr_title, pr_url, pr_summary, "
             "and affected_components (non-empty array of component objects). "
-            "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
+            "Call exactly once with a valid payload when done ? this is your ONLY way to return the result. "
             "If you get a rejection message, correct the object and call again."
         ),
         args_schema=_SubmitAnalysisToolArgs,
@@ -102,6 +110,7 @@ async def run_agent(
     except TimeoutError:
         yield ErrorEvent(message=f"Analysis timed out after {TIMEOUT_SECONDS} seconds.")
     except Exception as exc:
+        traceback.print_exc()
         yield ErrorEvent(message=f"Unexpected error during analysis: {exc}")
 
 
@@ -135,7 +144,7 @@ async def _run_agent_inner(
         )
     else:
         repo_context = (
-            "\nNo indexed repo found for this PR — use GitHub tools only "
+            "\nNo indexed repo found for this PR ? use GitHub tools only "
             "and set all confidence to 'low'."
         )
 

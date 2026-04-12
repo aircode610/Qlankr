@@ -79,7 +79,7 @@ async def index_repo(
     clone_path = os.path.join(tmp_dir, repo)
 
     # ── Clone ──────────────────────────────────────────────────────────────────
-    yield IndexStepEvent(stage="clone", summary=f"Cloning {repo_key}…")
+    yield IndexStepEvent(stage="clone", summary=f"Cloning {repo_key}?")
     try:
         proc = await asyncio.create_subprocess_exec(
             "git", "clone", "--depth=1", repo_url, clone_path,
@@ -97,7 +97,7 @@ async def index_repo(
     yield IndexStepEvent(stage="clone", summary=f"Cloned {repo_key}")
 
     # ── Analyze ────────────────────────────────────────────────────────────────
-    yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze…")
+    yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze?")
     try:
         proc = await asyncio.create_subprocess_exec(
             "gitnexus", "analyze", "--embeddings", clone_path,
@@ -119,7 +119,7 @@ async def index_repo(
             yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
             return
     except FileNotFoundError:
-        yield ErrorEvent(message="gitnexus not found — is it installed?")
+        yield ErrorEvent(message="gitnexus not found ? is it installed?")
         return
     except Exception as e:
         yield ErrorEvent(message=f"gitnexus analyze error: {e}")
@@ -133,7 +133,7 @@ async def index_repo(
     }
 
     # ── Fetch stats + graph via MCP ────────────────────────────────────────────
-    yield IndexStepEvent(stage="analyze", summary="Fetching graph data from GitNexus…")
+    yield IndexStepEvent(stage="analyze", summary="Fetching graph data from GitNexus?")
     stats, graph = await _fetch_stats_and_graph(repo)
     _registry[repo_key]["graph"] = graph
 
@@ -171,44 +171,44 @@ async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
     clusters: list[GraphCluster] = []
 
     try:
-        async with get_mcp_client() as client:
-            tools_list = await client.get_tools()
-            tool_map = {t.name: t for t in tools_list}
-            print(f"[indexer] MCP tools available: {sorted(tool_map)}", flush=True)
+        client = get_mcp_client()
+        tools_list = await client.get_tools()
+        tool_map = {t.name: t for t in tools_list}
+        print(f"[indexer] MCP tools available: {sorted(tool_map)}", flush=True)
 
-            # ── Stats via list_repos ───────────────────────────────────────────
-            if "list_repos" in tool_map:
-                try:
-                    raw = await tool_map["list_repos"].ainvoke({})
-                    for r in _to_records(raw):
-                        rname = r.get("name", "")
-                        rpath = r.get("path", "")
-                        if rname == repo_name or rpath.endswith(f"/{repo_name}"):
-                            s = r.get("stats", {})
-                            if isinstance(s, dict):
-                                stats = {
-                                    "files": int(s.get("files", 0)),
-                                    "nodes": int(s.get("nodes", 0)),
-                                    "edges": int(s.get("edges", 0)),
-                                    "communities": int(s.get("communities", 0)),
-                                    "processes": int(s.get("processes", 0)),
-                                }
-                            break
-                    print(f"[indexer] stats for {repo_name}: {stats}", flush=True)
-                except Exception as e:
-                    print(f"[indexer] list_repos error: {e}", flush=True)
+        # ── Stats via list_repos ───────────────────────────────────────────
+        if "list_repos" in tool_map:
+            try:
+                raw = await tool_map["list_repos"].ainvoke({})
+                for r in _to_records(raw):
+                    rname = r.get("name", "")
+                    rpath = r.get("path", "")
+                    if rname == repo_name or rpath.endswith(f"/{repo_name}"):
+                        s = r.get("stats", {})
+                        if isinstance(s, dict):
+                            stats = {
+                                "files": int(s.get("files", 0)),
+                                "nodes": int(s.get("nodes", 0)),
+                                "edges": int(s.get("edges", 0)),
+                                "communities": int(s.get("communities", 0)),
+                                "processes": int(s.get("processes", 0)),
+                            }
+                        break
+                print(f"[indexer] stats for {repo_name}: {stats}", flush=True)
+            except Exception as e:
+                print(f"[indexer] list_repos error: {e}", flush=True)
 
-            # ── Graph data via cypher ─────────────────────────────────────────
-            if "cypher" in tool_map:
-                cypher = tool_map["cypher"]
-                nodes, clusters = await _cypher_nodes(cypher, repo_name)
-                edges = await _cypher_edges(cypher, repo_name)
-                print(
-                    f"[indexer] graph: {len(nodes)} nodes, {len(edges)} edges, {len(clusters)} clusters",
-                    flush=True,
-                )
-            else:
-                print("[indexer] cypher tool not found — graph will be empty", flush=True)
+        # ── Graph data via cypher ─────────────────────────────────────────
+        if "cypher" in tool_map:
+            cypher = tool_map["cypher"]
+            nodes, clusters = await _cypher_nodes(cypher, repo_name)
+            edges = await _cypher_edges(cypher, repo_name)
+            print(
+                f"[indexer] graph: {len(nodes)} nodes, {len(edges)} edges, {len(clusters)} clusters",
+                flush=True,
+            )
+        else:
+            print("[indexer] cypher tool not found - graph will be empty", flush=True)
 
     except Exception as e:
         print(f"[indexer] _fetch_stats_and_graph error: {e}", flush=True)
@@ -221,7 +221,7 @@ async def _cypher_nodes(
 ) -> tuple[list[GraphNode], list[GraphCluster]]:
     """Fetch File nodes grouped by Community membership.
 
-    Join key is filePath — GitNexus uses filePath as the canonical file identifier.
+    Join key is filePath ? GitNexus uses filePath as the canonical file identifier.
 
     Uses undirected MEMBER_OF matching (catches both relationship directions).
     Communities with identical heuristicLabel are merged into one cluster.
@@ -304,7 +304,7 @@ async def _cypher_nodes(
 
         clustered   = sum(1 for n in nodes if not n.cluster.startswith("dir__") and n.cluster != "unclustered")
         dir_grouped = sum(1 for n in nodes if n.cluster.startswith("dir__"))
-        print(f"[indexer] file nodes: {len(nodes)} total — {clustered} community, {dir_grouped} dir-grouped", flush=True)
+        print(f"[indexer] file nodes: {len(nodes)} total ? {clustered} community, {dir_grouped} dir-grouped", flush=True)
     except Exception as e:
         print(f"[indexer] cypher file nodes error: {e}", flush=True)
 
@@ -323,7 +323,7 @@ async def _cypher_nodes(
 
 async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
     """Fetch IMPORTS edges between File nodes.
-    Note: CALLS exists only at symbol level, not file level — IMPORTS is the only
+    Note: CALLS exists only at symbol level, not file level ? IMPORTS is the only
     file-to-file edge type in the GitNexus schema.
     Uses filePath as source/target to match node IDs from _cypher_nodes.
     """

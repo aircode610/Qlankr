@@ -1,4 +1,4 @@
-"""Tests for backend/agent/tools.py — filter_tools() and stage tool subsets."""
+"""Tests for backend/agent/tools.py ? filter_tools() and stage tool subsets."""
 
 import pytest
 from unittest.mock import MagicMock, patch

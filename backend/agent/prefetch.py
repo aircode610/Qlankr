@@ -22,11 +22,11 @@ async def prefetch_context(pr_url: str, repo_name: str | None) -> dict:
 
     Returns:
         {
-            "processes":       list[dict]   — [{name, description}, ...]
-            "stats":           dict         — {files, nodes, edges, communities, processes}
-            "changed_symbols": list         — [] (populated by the gather stage)
+            "processes":       list[dict]   ? [{name, description}, ...]
+            "stats":           dict         ? {files, nodes, edges, communities, processes}
+            "changed_symbols": list         ? [] (populated by the gather stage)
         }
-        Always returns a valid dict — never raises.
+        Always returns a valid dict ? never raises.
     """
     if not repo_name:
         return dict(_EMPTY_RESULT)

@@ -115,7 +115,7 @@ async def debug_mcp_call(req: _DebugCallRequest):
     if req.tool not in tool_map:
         raise HTTPException(
             status_code=404,
-            detail=f"tool {req.tool!r} not found — available: {sorted(tool_map)}",
+            detail=f"tool {req.tool!r} not found ? available: {sorted(tool_map)}",
         )
     raw = await tool_map[req.tool].ainvoke(req.args)
     return {"tool": req.tool, "args": req.args, "result": _unwrap(raw)}

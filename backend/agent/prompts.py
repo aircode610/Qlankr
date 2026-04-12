@@ -13,42 +13,42 @@ is needed.
 
 ## Your Environment
 
-**1. The pull request** — via GitHub MCP tools.
+**1. The pull request** ? via GitHub MCP tools.
 The PR diff, file list, comments, and full file contents tell you what changed and why.
 
-**2. The knowledge graph** — via GitNexus MCP tools.
+**2. The knowledge graph** ? via GitNexus MCP tools.
 The repo has been pre-indexed into a call graph. Every function, class, file, import,
 and execution flow is a node or edge.
 
 Available GitNexus tools:
-- impact     — blast-radius for a symbol: risk level, affected processes, dependent depth
-- context    — 360° caller/callee view for a symbol
-- query      — hybrid semantic+BM25 search over execution flows
-- cypher     — raw Cypher queries for anything the above don't cover
-- list_repos — list indexed repos with stats
-- detect_changes — compares local git diff to graph (not useful for remote PRs)
-- list_processes — list all execution flows (processes) in the repo
-- get_process    — fetch the full step-by-step flow for one process
+- impact     ? blast-radius for a symbol: risk level, affected processes, dependent depth
+- context    ? 360? caller/callee view for a symbol
+- query      ? hybrid semantic+BM25 search over execution flows
+- cypher     ? raw Cypher queries for anything the above don't cover
+- list_repos ? list indexed repos with stats
+- detect_changes ? compares local git diff to graph (not useful for remote PRs)
+- list_processes ? list all execution flows (processes) in the repo
+- get_process    ? fetch the full step-by-step flow for one process
 
-**3. The repo name** — passed to you in the initial message.
+**3. The repo name** ? passed to you in the initial message.
 Pass it as `repo=<name>` on every GitNexus tool call.
 
 ## Graph Schema (for Cypher queries)
 
 Nodes: File, Function, Class, Method, Interface, Community, Process
 Relationships: ALL stored as `[:CodeRelation]` with a `type` property:
-  - `r.type = 'DEFINES'`         — File defines a symbol
-  - `r.type = 'CALLS'`           — symbol calls another symbol
-  - `r.type = 'IMPORTS'`         — File imports another File
-  - `r.type = 'MEMBER_OF'`       — symbol belongs to a Community cluster
-  - `r.type = 'STEP_IN_PROCESS'` — symbol is a step in an execution flow
+  - `r.type = 'DEFINES'`         ? File defines a symbol
+  - `r.type = 'CALLS'`           ? symbol calls another symbol
+  - `r.type = 'IMPORTS'`         ? File imports another File
+  - `r.type = 'MEMBER_OF'`       ? symbol belongs to a Community cluster
+  - `r.type = 'STEP_IN_PROCESS'` ? symbol is a step in an execution flow
 
 Key facts:
 - `impact` and `context` take a **symbol name**, NOT a file path
 - To find symbols in a file: MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
   AND f.filePath='<path>' RETURN s.name LIMIT 20
-- Files added by the PR won't be in the graph yet — note "new file — graph data unavailable"
-- All graph edges are `[:CodeRelation]` — filter by `r.type`
+- Files added by the PR won't be in the graph yet ? note "new file ? graph data unavailable"
+- All graph edges are `[:CodeRelation]` ? filter by `r.type`
 
 ## Rules
 
@@ -57,6 +57,11 @@ Key facts:
 - Always pass `repo=<repo_name>` to every GitNexus tool call.
 - Ground every claim in tool output. Do not invent data.
 - For new files not yet in the graph: set confidence to "low".
+- CRITICAL: GitNexus tools only accept ASCII characters in arguments.
+  Before passing any text to a GitNexus tool (cypher, query, impact, context, etc.),
+  replace all non-ASCII characters with ASCII equivalents:
+  em dash (--), smart quotes (""/'' -> ""/'), arrows (->) etc.
+  Never copy-paste PR content directly into GitNexus tool arguments without sanitizing.
 """
 
 # ── Stage prompts ─────────────────────────────────────────────────────────────
@@ -67,7 +72,7 @@ GATHER_PROMPT = """\
 ## Current Stage: Context Gathering
 
 Your goal is to pre-fetch all context the downstream stages need.
-COLLECT only — do not analyse, generate test specs, or draw conclusions yet.
+COLLECT only ? do not analyse, generate test specs, or draw conclusions yet.
 
 ### Your task
 1. Fetch PR metadata: title, description, author via `get_pull_request`
@@ -77,7 +82,7 @@ COLLECT only — do not analyse, generate test specs, or draw conclusions yet.
    AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 30
 4. Fetch the repo's process list via `list_repos` (stats include process count and names)
 5. Write an initial `affected_components` list: component name + changed files.
-   No test specs yet — just names and file paths.
+   No test specs yet ? just names and file paths.
 
 ### Output
 Populate state with:
@@ -140,7 +145,7 @@ identify where module boundaries are crossed.
 
 ### Your task
 For each changed symbol:
-1. Use `impact` to find blast radius — which modules and processes depend on it
+1. Use `impact` to find blast radius ? which modules and processes depend on it
 2. Use `context` to map caller/callee chains that cross module boundaries
 3. Use `query` (semantic search) to find related execution flows
 4. Use `cypher` for precise relationship queries if needed
@@ -169,7 +174,7 @@ For each changed symbol:
 impact, context, query, cypher
 
 ### Budget: 15 tool calls maximum
-Do not guess module boundaries — only report integrations you found via tools.
+Do not guess module boundaries ? only report integrations you found via tools.
 Rate risk based on blast radius depth and process involvement.
 """
 
