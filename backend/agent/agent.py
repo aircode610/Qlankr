@@ -1,13 +1,13 @@
 import asyncio
 import re
 import sys
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, AsyncIterator
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
@@ -37,32 +37,22 @@ class _AnalysisResult(BaseModel):
     affected_components: Annotated[list[AffectedComponent], Field(min_length=1)]
 
 
-class _SubmitAnalysisToolArgs(BaseModel):
-    """Single `analysis` dict validated inside the tool so partial payloads become ToolMessages, not crashes."""
-
-    analysis: dict = Field(
-        description=(
-            "Complete analysis object. Required keys: pr_title (string), pr_url (string), "
-            "pr_summary (string), affected_components (non-empty array). "
-            "Each element of affected_components must have: component, impact_summary, confidence "
-            '("high"|"medium"|"low"); optional: files_changed, risks (arrays of strings), '
-            "test_suggestions with skip, run, deeper (arrays of strings, may be empty). "
-            "You may instead pass those keys at the top level of the tool input (without nesting under analysis)."
-        )
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_flat_or_nested(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "analysis" not in data:
-            return {"analysis": data}
-        return data
-
-
 def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
-    def submit_analysis(analysis: dict) -> str:
+    def submit_analysis(
+        pr_title: str,
+        pr_url: str,
+        pr_summary: str,
+        affected_components: list,
+    ) -> str:
         try:
-            parsed = _AnalysisResult.model_validate(analysis)
+            parsed = _AnalysisResult.model_validate(
+                {
+                    "pr_title": pr_title,
+                    "pr_url": pr_url,
+                    "pr_summary": pr_summary,
+                    "affected_components": affected_components,
+                }
+            )
         except Exception as e:
             return (
                 "submit_analysis rejected — fix the payload and call submit_analysis again. "
@@ -76,12 +66,10 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
         name="submit_analysis",
         description=(
             "Submit the completed QA impact analysis. "
-            "Pass one argument: `analysis`, a single JSON object with pr_title, pr_url, pr_summary, "
-            "and affected_components (non-empty array of component objects). "
+            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array of component objects). "
             "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
-            "If you get a rejection message, correct the object and call again."
+            "If you get a rejection message, correct the payload and call again."
         ),
-        args_schema=_SubmitAnalysisToolArgs,
     )
 
 
