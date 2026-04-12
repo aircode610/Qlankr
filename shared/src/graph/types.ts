@@ -1,0 +1,121 @@
+import { SupportedLanguages } from '../languages.js';
+
+export type NodeLabel =
+  | 'Project'
+  | 'Package'
+  | 'Module'
+  | 'Folder'
+  | 'File'
+  | 'Class'
+  | 'Function'
+  | 'Method'
+  | 'Variable'
+  | 'Interface'
+  | 'Enum'
+  | 'Decorator'
+  | 'Import'
+  | 'Type'
+  | 'CodeElement'
+  | 'Community'
+  | 'Process'
+  | 'Struct'
+  | 'Macro'
+  | 'Typedef'
+  | 'Union'
+  | 'Namespace'
+  | 'Trait'
+  | 'Impl'
+  | 'TypeAlias'
+  | 'Const'
+  | 'Static'
+  | 'Property'
+  | 'Record'
+  | 'Delegate'
+  | 'Annotation'
+  | 'Constructor'
+  | 'Template'
+  | 'Section'
+  | 'Route'
+  | 'Tool';
+
+export type NodeProperties = {
+  name: string;
+  filePath: string;
+  startLine?: number;
+  endLine?: number;
+  language?: SupportedLanguages | string;
+  isExported?: boolean;
+  astFrameworkMultiplier?: number;
+  astFrameworkReason?: string;
+  heuristicLabel?: string;
+  cohesion?: number;
+  symbolCount?: number;
+  keywords?: string[];
+  description?: string;
+  enrichedBy?: 'heuristic' | 'llm';
+  processType?: 'intra_community' | 'cross_community';
+  stepCount?: number;
+  communities?: string[];
+  entryPointId?: string;
+  terminalId?: string;
+  entryPointScore?: number;
+  entryPointReason?: string;
+  parameterCount?: number;
+  level?: number;
+  returnType?: string;
+  declaredType?: string;
+  visibility?: string;
+  isStatic?: boolean;
+  isReadonly?: boolean;
+  isAbstract?: boolean;
+  isFinal?: boolean;
+  isVirtual?: boolean;
+  isOverride?: boolean;
+  isAsync?: boolean;
+  isPartial?: boolean;
+  annotations?: string[];
+  responseKeys?: string[];
+  errorKeys?: string[];
+  middleware?: string[];
+  [key: string]: unknown;
+};
+
+export type RelationshipType =
+  | 'CONTAINS'
+  | 'CALLS'
+  | 'INHERITS'
+  | 'METHOD_OVERRIDES'
+  | 'METHOD_IMPLEMENTS'
+  | 'IMPORTS'
+  | 'USES'
+  | 'DEFINES'
+  | 'DECORATES'
+  | 'IMPLEMENTS'
+  | 'EXTENDS'
+  | 'HAS_METHOD'
+  | 'HAS_PROPERTY'
+  | 'ACCESSES'
+  | 'MEMBER_OF'
+  | 'STEP_IN_PROCESS'
+  | 'HANDLES_ROUTE'
+  | 'FETCHES'
+  | 'HANDLES_TOOL'
+  | 'ENTRY_POINT_OF'
+  | 'WRAPS'
+  | 'QUERIES';
+
+export interface GraphNode {
+  id: string;
+  label: NodeLabel;
+  properties: NodeProperties;
+}
+
+export interface GraphRelationship {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  type: RelationshipType;
+  confidence: number;
+  reason: string;
+  step?: number;
+}

@@ -18,7 +18,9 @@ services:
       - LANGCHAIN_PROJECT=qlankr
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     ports:
       - "5173:5173"
     env_file:
@@ -39,6 +41,8 @@ services:
       - GITHUB_TOKEN=${GITHUB_TOKEN}
 
   frontend-test:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     profiles: [test]
-    command: npm test
+    command: sh -c "cd frontend && npm test"
