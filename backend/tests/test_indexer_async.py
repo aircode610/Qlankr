@@ -170,3 +170,53 @@ async def test_get_graph_data_lazy_read():
     assert len(result.nodes) == 1
     # Result is now cached in registry
     assert indexer._registry["owner/repo2"]["graph"] is not None
+
+
+# --- embeddings ---
+
+async def test_embeddings_flag_passed():
+    """gitnexus analyze must be called with --embeddings."""
+    git_proc = make_git_proc(returncode=0)
+    gitnexus_proc = make_gitnexus_proc(lines=[], returncode=0)
+    mock_graph = GraphData(nodes=[], edges=[], clusters=[])
+    captured_args = []
+
+    async def mock_exec(*args, **kwargs):
+        captured_args.append(args)
+        if args[0] == "git":
+            return git_proc
+        return gitnexus_proc
+
+    with patch("asyncio.create_subprocess_exec", mock_exec):
+        with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
+            await collect(index_repo("https://github.com/owner/repo"))
+
+    gitnexus_calls = [a for a in captured_args if a[0] == "gitnexus"]
+    assert gitnexus_calls, "gitnexus was never called"
+    assert "--embeddings" in gitnexus_calls[0], (
+        f"--embeddings flag missing from gitnexus call: {gitnexus_calls[0]}"
+    )
+
+
+async def test_embeddings_stage_emitted():
+    """A stdout line containing 'embedding' must yield IndexStepEvent(stage='embeddings')."""
+    git_proc = make_git_proc(returncode=0)
+    gitnexus_proc = make_gitnexus_proc(
+        lines=["Generating embeddings for 42 files\n"], returncode=0
+    )
+    mock_graph = GraphData(nodes=[], edges=[], clusters=[])
+
+    async def mock_exec(*args, **kwargs):
+        if args[0] == "git":
+            return git_proc
+        return gitnexus_proc
+
+    with patch("asyncio.create_subprocess_exec", mock_exec):
+        with patch("indexer._fetch_stats_and_graph", return_value=({}, mock_graph)):
+            events = await collect(index_repo("https://github.com/owner/repo"))
+
+    embedding_events = [
+        e for e in events
+        if isinstance(e, IndexStepEvent) and e.stage == "embeddings"
+    ]
+    assert embedding_events, "No IndexStepEvent with stage='embeddings' was emitted"
