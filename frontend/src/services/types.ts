@@ -1,3 +1,6 @@
+/** Workflow the user chose to run */
+export type WorkflowId = 'unit_tests' | 'integration_tests' | 'e2e_planning';
+
 /** Analysis pipeline stages */
 export type AnalysisStage =
   | 'gathering'
@@ -109,6 +112,7 @@ export interface AnalysisState {
   prUrl: string | null;
   context: string | null;
   sessionId: string | null;
+  activeWorkflow: WorkflowId | null;
   currentStage: AnalysisStage | null;
   agentSteps: Array<{ tool: string; summary: string; stage: AnalysisStage | null }>;
   checkpoint: CheckpointData | null;

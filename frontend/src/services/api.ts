@@ -196,11 +196,13 @@ export async function analyzePR(
   prUrl: string,
   context: string | null = null,
   sessionId: string | null = null,
+  workflowType: string | null = null,
   opts: AnalyzeCallbacks = {},
 ): Promise<unknown> {
   const body: Record<string, unknown> = { pr_url: prUrl };
   if (context) body.context = context;
   if (sessionId) body.session_id = sessionId;
+  if (workflowType) body.workflow_type = workflowType;
 
   let finalPayload: unknown = null;
   try {

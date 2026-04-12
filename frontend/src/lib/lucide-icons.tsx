@@ -12,6 +12,8 @@ export {
   ChevronUp,
   ClipboardCopy,
   Code,
+  Code2,
+  Map,
   Copy,
   Eye,
   EyeOff,

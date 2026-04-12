@@ -1,16 +1,16 @@
-import { useRef, useCallback, Component, ReactNode } from 'react';
+import { useRef, useCallback, useState, useEffect, Component, ReactNode } from 'react';
 import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { GraphCanvas, GraphCanvasHandle } from './components/GraphCanvas';
 import { FileTreePanel } from './components/FileTreePanel';
 import { StatusBar } from './components/StatusBar';
-import { RepoInput } from './components/RepoInput';
+import { IndexingPage } from './components/IndexingPage';
 import { PrAnalysisPanel } from './components/PrAnalysisPanel';
 import { AgentTraceDrawer } from './components/AgentTraceDrawer';
 import { TestPipelineResults } from './components/TestPipelineResults';
 import { CheckpointDialog } from './components/CheckpointDialog';
 import { createKnowledgeGraph } from './core/graph/graph';
 import { indexRepo, analyzePR, continueAnalysis, getGraph } from './services/api';
-import type { AnalysisStage, CheckpointData, AnalyzeResult } from './services/types';
+import type { AnalysisStage, CheckpointData, AnalyzeResult, WorkflowId } from './services/types';
 
 // ── Error boundary — prevents entire UI going black on render errors ──
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -37,24 +37,36 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: string |
 const AppContent = () => {
   const {
     graph, setGraph,
-    repoUrl, setRepoUrl,
+    setRepoUrl,
     indexing, setIndexing,
     indexed, setIndexed,
     indexMessages, setIndexMessages,
     setProgress,
     analysisState, setAnalysisState,
     affectedFileIds, setAffectedFileIds,
-    selectedNode,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Show main workspace only after a brief delay once indexing completes,
+  // so the user sees the "Indexing complete" state on the landing page.
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const [indexError, setIndexError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (indexed) {
+      const t = setTimeout(() => setShowWorkspace(true), 900);
+      return () => clearTimeout(t);
+    }
+  }, [indexed]);
 
   /* ── Repo indexing ─────────────────────────────────────────── */
   const handleIndex = useCallback(async (url: string) => {
     setRepoUrl(url);
     setIndexing(true);
     setIndexMessages([]);
+    setIndexError(null);
     setProgress({ phase: 'extracting', percent: 0, message: 'Indexing repository…' });
 
     try {
@@ -80,6 +92,7 @@ const AppContent = () => {
           setTimeout(() => setProgress(null), 2000);
         },
         onError: (msg) => {
+          setIndexError(msg);
           setProgress({ phase: 'error', percent: 0, message: msg });
           setTimeout(() => setProgress(null), 3000);
         },
@@ -92,7 +105,7 @@ const AppContent = () => {
   }, [setRepoUrl, setIndexing, setIndexMessages, setProgress, setIndexed, setGraph]);
 
   /* ── PR analysis ───────────────────────────────────────────── */
-  const handleAnalyze = useCallback(async (prUrl: string, context: string | null) => {
+  const handleAnalyze = useCallback(async (prUrl: string, context: string | null, workflow: WorkflowId) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
@@ -100,6 +113,7 @@ const AppContent = () => {
       ...prev,
       prUrl,
       context,
+      activeWorkflow: workflow,
       analyzing: true,
       agentSteps: [],
       checkpoint: null,
@@ -111,7 +125,7 @@ const AppContent = () => {
     setAffectedFileIds(new Set());
 
     try {
-      await analyzePR(prUrl, context, null, {
+      await analyzePR(prUrl, context, null, workflow, {
         signal: abortRef.current.signal,
         onAgentStep: (data) => {
           setAnalysisState((prev) => ({
@@ -139,7 +153,6 @@ const AppContent = () => {
             result,
             currentStage: null,
           }));
-          // Highlight affected files in graph
           if (graph && allFiles.length > 0) {
             const fileIds = new Set(
               graph.nodes.filter((n) => allFiles.some((f) => n.properties.filePath.endsWith(f))).map((n) => n.id)
@@ -217,14 +230,27 @@ const AppContent = () => {
     setAffectedFileIds(ids);
   }, [graph, setAffectedFileIds]);
 
-  const { analyzing, agentSteps, currentStage, sessionId, checkpoint, result, error } = analysisState;
+  const { analyzing, agentSteps, currentStage, checkpoint, result, error, activeWorkflow } = analysisState;
 
+  // ── Indexing / landing screen ────────────────────────────────
+  if (!showWorkspace) {
+    return (
+      <IndexingPage
+        onIndex={handleIndex}
+        indexing={indexing}
+        indexed={indexed}
+        indexMessages={indexMessages}
+        error={indexError}
+      />
+    );
+  }
+
+  // ── Main workspace ───────────────────────────────────────────
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-void">
-      {/* ── Main layout ── */}
       <main className="flex min-h-0 flex-1">
 
-        {/* Left panel — file tree */}
+        {/* Left — file tree */}
         <FileTreePanel onFocusNode={handleFocusNode} />
 
         {/* Centre — graph canvas */}
@@ -232,33 +258,23 @@ const AppContent = () => {
           {graph ? (
             <GraphCanvas ref={graphCanvasRef} />
           ) : (
-            /* No-graph placeholder */
             <div className="flex h-full flex-col items-center justify-center gap-4 bg-void">
               <div className="animate-breathe rounded-full border-2 border-accent/30 p-6">
                 <div className="h-16 w-16 rounded-full bg-gradient-to-br from-accent/30 to-accent/5" />
               </div>
-              <p className="text-sm text-text-muted">Index a repository to load the knowledge graph</p>
+              <p className="text-sm text-text-muted">Loading knowledge graph…</p>
             </div>
           )}
         </div>
 
-        {/* Right panel — controls + trace + results */}
+        {/* Right — workflow panel */}
         <div className="flex w-80 flex-col border-l border-border-subtle bg-surface">
-
-          {/* Input area */}
-          <div className="flex flex-col gap-4 border-b border-border-subtle p-4">
-            <RepoInput
-              onIndex={handleIndex}
-              indexing={indexing}
-              indexed={indexed}
-              indexMessages={indexMessages}
-            />
+          <div className="flex flex-col gap-3 border-b border-border-subtle p-4">
             <PrAnalysisPanel
               onAnalyze={handleAnalyze}
               analyzing={analyzing}
-              currentStage={currentStage}
-              sessionId={sessionId}
-              disabled={!indexed}
+              activeWorkflow={activeWorkflow}
+              disabled={false}
             />
             {error && (
               <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
@@ -267,12 +283,16 @@ const AppContent = () => {
             )}
           </div>
 
-          {/* Agent trace / results */}
           <div className="min-h-0 flex-1 overflow-hidden">
             {result ? (
               <TestPipelineResults result={result} onHighlightFiles={handleHighlightFiles} />
             ) : (
-              <AgentTraceDrawer steps={agentSteps} analyzing={analyzing} currentStage={currentStage} />
+              <AgentTraceDrawer
+                steps={agentSteps}
+                analyzing={analyzing}
+                activeWorkflow={activeWorkflow}
+                currentStage={currentStage}
+              />
             )}
           </div>
         </div>
@@ -280,7 +300,6 @@ const AppContent = () => {
 
       <StatusBar />
 
-      {/* Checkpoint modal */}
       {checkpoint && (
         <CheckpointDialog
           checkpoint={checkpoint}
@@ -295,7 +314,9 @@ const AppContent = () => {
 function App() {
   return (
     <AppStateProvider>
-      <AppContent />
+      <ErrorBoundary>
+        <AppContent />
+      </ErrorBoundary>
     </AppStateProvider>
   );
 }

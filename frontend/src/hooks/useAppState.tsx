@@ -58,6 +58,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     prUrl: null,
     context: null,
     sessionId: null,
+    activeWorkflow: null,
     currentStage: null,
     agentSteps: [],
     checkpoint: null,
