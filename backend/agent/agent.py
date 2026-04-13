@@ -5,25 +5,25 @@ import sys
 import traceback
 import unicodedata
 from typing import Annotated, Any, AsyncIterator, TypedDict
+from uuid import uuid4
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import create_react_agent
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
-from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
 from indexer import get_repo_name
 from models import (
     AffectedComponent,
     AgentStepEvent,
     AnalyzeResponse,
+    CheckpointEvent,
     ErrorEvent,
     ResultEvent,
+    StageChangeEvent,
 )
 
 class AnalysisState(TypedDict):
@@ -221,6 +221,35 @@ def build_analysis_graph():
 MAX_TOOL_CALLS = 25
 TIMEOUT_SECONDS = 180
 
+# ── Graph singleton ───────────────────────────────────────────────────────────
+# MemorySaver stores checkpoint state in-process — must be the same instance
+# across the initial run and all /continue resumes for a session.
+
+_graph_instance = None
+
+
+def _get_graph():
+    global _graph_instance
+    if _graph_instance is None:
+        _graph_instance = build_analysis_graph()
+    return _graph_instance
+
+
+# ── Session store (stub — Dev C owns sessions.py) ────────────────────────────
+# Keyed by session_id (thread_id). Stores lightweight metadata only;
+# actual graph state lives in the MemorySaver checkpointer above.
+# Replace with create_session() / get_session() from agent/sessions.py once
+# devc/testing-models lands.
+
+_sessions: dict[str, dict] = {}
+
+# ── Stage node names (for StageChangeEvent filtering) ────────────────────────
+
+_STAGE_NODES = {
+    "gather", "unit_tests", "checkpoint_unit", "choice",
+    "integration_tests", "e2e_checkpoint", "e2e_planning", "submit",
+}
+
 _llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     temperature=0,
@@ -277,19 +306,21 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
     )
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry points ─────────────────────────────────────────────────────────────
 
 async def run_agent(
     pr_url: str,
-) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
+    context: str | None = None,
+    session_id: str | None = None,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
     """
-    Entry point for PR impact analysis.
-    Yields AgentStepEvent per tool call (for live trace), then ResultEvent or ErrorEvent.
-    Called by main.py's POST /analyze handler.
+    Start a new PR analysis session.
+    Streams SSE events until graph completes or hits a checkpoint interrupt.
+    Called by main.py POST /analyze.
     """
     try:
         async with asyncio.timeout(TIMEOUT_SECONDS):
-            async for event in _run_agent_inner(pr_url):
+            async for event in _start_graph(pr_url, context, session_id):
                 yield event
     except TimeoutError:
         yield ErrorEvent(message=f"Analysis timed out after {TIMEOUT_SECONDS} seconds.")
@@ -298,9 +329,151 @@ async def run_agent(
         yield ErrorEvent(message=f"Unexpected error during analysis: {exc}")
 
 
+async def continue_agent(
+    session_id: str,
+    user_response: dict,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
+    """
+    Resume a graph paused at a checkpoint interrupt.
+    Called by main.py POST /analyze/{session_id}/continue (endpoint owned by Dev C).
+    user_response is passed directly as the interrupt resume value, e.g.:
+      {"action": "approve"}
+      {"action": "refine", "feedback": "..."}
+      {"choice": "integration"}
+      {"context": "..."}
+      {"answer": "..."}
+    """
+    try:
+        async with asyncio.timeout(TIMEOUT_SECONDS):
+            async for event in _resume_graph(session_id, user_response):
+                yield event
+    except TimeoutError:
+        yield ErrorEvent(message=f"Resume timed out after {TIMEOUT_SECONDS} seconds.")
+    except Exception as exc:
+        traceback.print_exc()
+        yield ErrorEvent(message=f"Unexpected error during resume: {exc}")
+
+
 def _extract_owner_repo(pr_url: str) -> tuple[str, str] | None:
     m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/", pr_url)
     return (m.group(1), m.group(2)) if m else None
+
+
+async def _start_graph(
+    pr_url: str,
+    context: str | None,
+    session_id: str | None,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
+    thread_id = session_id or str(uuid4())
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+
+    owner_repo = _extract_owner_repo(pr_url)
+    repo_name: str | None = None
+    if owner_repo:
+        repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
+
+    initial_state: AnalysisState = {
+        "pr_url": pr_url,
+        "repo_name": repo_name,
+        "user_context": context,
+        "session_id": thread_id,
+        "pr_diff": "",
+        "pr_files": [],
+        "pr_metadata": {},
+        "processes": [],
+        "repo_stats": {},
+        "affected_components": [],
+        "integration_tests": [],
+        "e2e_test_plans": [],
+        "current_stage": "gather",
+        "tool_calls_used": 0,
+        "messages": [],
+        "user_choice": None,
+        "unit_feedback": None,
+    }
+
+    _sessions[thread_id] = {"pr_url": pr_url, "repo_name": repo_name}
+
+    async for event in _stream_graph(_get_graph(), initial_state, config, thread_id, pr_url):
+        yield event
+
+
+async def _resume_graph(
+    session_id: str,
+    user_response: dict,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
+    if session_id not in _sessions:
+        yield ErrorEvent(message=f"Session {session_id!r} not found.")
+        return
+
+    config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
+    pr_url = _sessions[session_id].get("pr_url", "")
+
+    async for event in _stream_graph(
+        _get_graph(), Command(resume=user_response), config, session_id, pr_url
+    ):
+        yield event
+
+
+async def _stream_graph(
+    graph: Any,
+    input_or_command: Any,
+    config: dict,
+    thread_id: str,
+    pr_url: str,
+) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | ResultEvent | ErrorEvent]:
+    """
+    Drive the graph, mapping LangGraph events to SSE events.
+    After the stream ends, checks state for interrupt or completion.
+    """
+    async for event in graph.astream_events(input_or_command, version="v2", config=config):
+        event_type = event["event"]
+        node_name = event.get("metadata", {}).get("langgraph_node", "")
+
+        if event_type == "on_chain_start" and node_name in _STAGE_NODES:
+            yield StageChangeEvent(
+                stage=node_name,
+                summary=f"Starting {node_name.replace('_', ' ')}",
+            )
+
+        elif event_type == "on_tool_start":
+            tool_name = event["name"]
+            tool_input = event["data"].get("input", {})
+            yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
+
+    # Stream ended — check whether graph paused at interrupt or finished
+    state = await graph.aget_state(config)
+
+    if state.next:
+        # Graph is paused — extract interrupt payload
+        interrupt_values = [
+            intr.value
+            for task in state.tasks
+            for intr in getattr(task, "interrupts", [])
+        ]
+        payload = interrupt_values[0] if interrupt_values else {}
+        yield CheckpointEvent(
+            session_id=thread_id,
+            stage_completed=state.values.get("current_stage", "unknown"),
+            interrupt_type=payload.get("type", "checkpoint"),
+            payload=payload,
+        )
+    else:
+        # Graph completed — assemble ResultEvent from final state
+        final = state.values
+        components = final.get("affected_components", [])
+        if not components:
+            yield ErrorEvent(message="Analysis completed but produced no affected components.")
+            return
+
+        pr_meta = final.get("pr_metadata", {})
+        yield ResultEvent(
+            pr_title=pr_meta.get("title", pr_url),
+            pr_url=pr_url,
+            pr_summary=pr_meta.get("description", ""),
+            affected_components=components,
+            agent_steps=final.get("tool_calls_used", 0),
+        )
 
 
 # ── Unicode sanitization ──────────────────────────────────────────────────────
@@ -352,66 +525,6 @@ def _wrap_mcp_tools(tools: list) -> list:
     return wrapped
 
 
-async def _run_agent_inner(
-    pr_url: str,
-) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
-    client = get_mcp_client()
-    mcp_tools = _wrap_mcp_tools(await client.get_tools())
-
-    submit_results: list[_AnalysisResult] = []
-    agent = create_react_agent(
-        model=_llm,
-        tools=mcp_tools + [_make_submit_tool(submit_results)],
-        prompt=SystemMessage(content=SYSTEM_PROMPT),
-    )
-
-    owner_repo = _extract_owner_repo(pr_url)
-    repo_name: str | None = None
-    if owner_repo:
-        repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
-
-    if repo_name:
-        repo_context = (
-            f"\nThe repo '{repo_name}' is indexed in GitNexus."
-            f"\nPass repo=\"{repo_name}\" to every GitNexus tool call."
-        )
-    else:
-        repo_context = (
-            "\nNo indexed repo found for this PR ? use GitHub tools only "
-            "and set all confidence to 'low'."
-        )
-
-    tool_call_count = 0
-
-    async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}{repo_context}")]},
-        version="v2",
-        config={"recursion_limit": 60},
-    ):
-        if event["event"] != "on_tool_start":
-            continue
-
-        tool_name = event["name"]
-        tool_input = event["data"].get("input", {})
-
-        tool_call_count += 1
-        yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
-
-        if tool_call_count >= MAX_TOOL_CALLS:
-            break
-
-    analysis_result = submit_results[-1] if submit_results else None
-    if analysis_result is None:
-        yield ErrorEvent(message="Agent did not submit an analysis result.")
-        return
-
-    yield ResultEvent(**AnalyzeResponse(
-        pr_title=analysis_result.pr_title,
-        pr_url=analysis_result.pr_url,
-        pr_summary=analysis_result.pr_summary,
-        affected_components=analysis_result.affected_components,
-        agent_steps=tool_call_count,
-    ).model_dump())
 
 
 # ── Tool summary builders ─────────────────────────────────────────────────────

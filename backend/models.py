@@ -1,10 +1,12 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class AnalyzeRequest(BaseModel):
     pr_url: str
+    context: str | None = None      # optional bug report / scenario for E2E stage
+    session_id: str | None = None   # provide to resume from a checkpoint
 
 
 class TestSuggestions(BaseModel):
@@ -88,6 +90,24 @@ class GraphData(BaseModel):
 
 class ResultEvent(AnalyzeResponse):
     type: Literal["result"] = "result"
+
+
+# TODO: Dev C owns models.py — these are stubs until their branch merges.
+# Replace with their canonical definitions when devc/testing-models lands.
+
+class StageChangeEvent(BaseModel):
+    type: Literal["stage_change"] = "stage_change"
+    stage: str      # "gather" | "unit_tests" | "checkpoint_unit" | "choice" |
+                    # "integration_tests" | "e2e_checkpoint" | "e2e_planning" | "submit"
+    summary: str
+
+
+class CheckpointEvent(BaseModel):
+    type: Literal["checkpoint"] = "checkpoint"
+    session_id: str
+    stage_completed: str
+    interrupt_type: str     # "checkpoint" | "choice" | "e2e_context" | "question"
+    payload: dict[str, Any]
 
 
 # Request models
