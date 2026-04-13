@@ -51,24 +51,27 @@ _STAGE_TOOLS: dict[str, set[str]] = {
 
 
 def _server_config() -> dict:
-    return {
+    import shutil
+    config = {
         "github": {
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-github"],
             "env": {
                 **os.environ,
-                # The GitHub MCP server expects GITHUB_PERSONAL_ACCESS_TOKEN
                 "GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_TOKEN", ""),
             },
         },
-        "gitnexus": {
+    }
+    # Only include GitNexus if the binary is available (not present in local dev)
+    if shutil.which("gitnexus"):
+        config["gitnexus"] = {
             "transport": "stdio",
             "command": "gitnexus",
             "args": ["mcp"],
             "env": {**os.environ},
-        },
-    }
+        }
+    return config
 
 
 def get_mcp_client() -> MultiServerMCPClient:
