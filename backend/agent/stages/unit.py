@@ -1,9 +1,11 @@
 """
 Stage 2: Unit Test Generation
 
-For each affected component, generates UnitTestSpec objects describing
-test cases, mock dependencies, and priority.
-Budget: 15 tool calls.
+One sequential agent processes components one at a time.
+For each component it reads files, generates specs, calls submit_unit_tests,
+then moves to the next — never reading ahead.
+
+Budget: 15 tool calls total across all components.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -30,25 +32,18 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
     all_tools = await client.get_tools()
     stage_tools = filter_tools(all_tools, "unit")
 
-    unit_results: dict[str, list] = {}  # component -> [UnitTestSpec dicts]
+    unit_results: dict[str, list] = {}
 
     def submit_unit_tests(component: str, unit_tests: list) -> str:
-        """
-        Submit unit test specs for one component.
-        component: exact component name from affected_components.
-        unit_tests: list of UnitTestSpec dicts with keys:
-          target (str), test_cases (list), mocks_needed (list), priority (str).
-        """
         unit_results[component] = unit_tests
-        return f"Unit tests recorded for {component}."
+        return f"Recorded. Move to the next component."
 
     submit_tool = StructuredTool.from_function(
         func=submit_unit_tests,
         name="submit_unit_tests",
         description=(
-            "Submit unit test specs for one affected component. "
-            "Call once per component. "
-            "Pass component (exact name from the list) and unit_tests "
+            "Submit unit test specs for the current component before moving to the next. "
+            "Pass component (exact name) and unit_tests "
             "(list of objects with: target, test_cases [{name, scenario, expected}], "
             "mocks_needed, priority ['high'|'medium'|'low'])."
         ),
@@ -61,39 +56,46 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
         else "No indexed repo — use get_file_contents only."
     )
 
-    components_list = "\n".join(
-        f"- {c.get('component')}: {', '.join(c.get('files_changed', []))}"
-        for c in components
+    # Build a numbered component list so the agent processes them in order
+    components_block = "\n".join(
+        f"{i+1}. Component: {c.get('component')}\n"
+        f"   Files: {', '.join(c.get('files_changed', []))}"
+        for i, c in enumerate(components)
     )
 
-    submit_instruction = (
-        "\n\n## Output requirement\n"
-        "You MUST call `submit_unit_tests` once for EACH component when done.\n"
-        "Do NOT write test specs as text — only tool calls count as output.\n"
-        "After reading files, immediately call submit_unit_tests for that component."
+    pr_diff = state.get("pr_diff", "")
+    diff_section = (
+        f"## PR Diff (already fetched — do NOT call get_file_contents)\n```\n{pr_diff[:6000]}\n```"
+        if pr_diff
+        else "No diff available — use get_file_contents if needed."
     )
 
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
-        prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{UNIT_PROMPT}{submit_instruction}"),
+        prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{UNIT_PROMPT}"),
     )
 
     tool_call_count = 0
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=(
-            f"Generate unit test specs for these components:\n{components_list}\n\n"
-            f"{repo_clause}\n"
-            f"You have {BUDGET} tool calls total. After analysing each component, "
-            "call submit_unit_tests before moving to the next one."
+            f"{diff_section}\n\n"
+            f"Process these components ONE AT A TIME in order:\n\n{components_block}\n\n"
+            f"{repo_clause}\n\n"
+            "For each component:\n"
+            "1. Use the diff above — do NOT call get_file_contents\n"
+            "2. Use context/cypher only if you need deeper graph info\n"
+            "3. Call submit_unit_tests with the specs\n"
+            "4. Only then move to the next component\n\n"
+            f"Total budget: {BUDGET} tool calls."
         ))]},
         version="v2",
-        config={"recursion_limit": 40},
+        config={"recursion_limit": 60},
     ):
         if event["event"] == "on_tool_start":
             tool_call_count += 1
             print(f"  [unit {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if tool_call_count >= BUDGET:
+            if event["name"] != "submit_unit_tests" and tool_call_count >= BUDGET:
                 break
 
     updated = [

@@ -102,17 +102,19 @@ Stop and output what you have when you reach 10 calls.
 UNIT_PROMPT = """\
 ## Current Stage: Unit Test Generation
 
-For each affected component identified in the gather stage, generate unit test
-specifications. Use the tools to understand each symbol's interface before writing specs.
+For each affected component, generate unit test specifications by reading the code
+and understanding each symbol's interface. Use tools only to gather information —
+your output MUST be delivered by calling `submit_unit_tests` for every component.
 
 ### Your task
-For each changed symbol in `affected_components`:
-1. Use `context` to understand its callers, callees, and dependencies
-2. Use `get_file_contents` to read the actual implementation if needed
-3. Use `cypher` to find type signatures or related symbols if context is unclear
-4. Generate a UnitTestSpec for each symbol
+For each component in the list:
+1. Use `get_file_contents` to read the changed files
+2. Use `context` to understand callers, callees, and dependencies (if available)
+3. Use `cypher` to find type signatures or related symbols (if available)
+4. Identify the key symbols (functions, methods, classes) that changed
+5. Call `submit_unit_tests` with the component name and its UnitTestSpec list
 
-### Output schema: UnitTestSpec
+### UnitTestSpec schema
 ```
 {
   "target": "SymbolName.methodName",         // symbol under test
@@ -128,12 +130,16 @@ For each changed symbol in `affected_components`:
 }
 ```
 
+### Rules
+- MUST call `submit_unit_tests` once per component — text output is ignored
+- Call it immediately after analysing a component, before moving to the next
+- If tools are unavailable, generate specs from file contents alone
+- If budget runs low, reduce test cases per symbol rather than skipping components
+
 ### Allowed tools
-context, cypher, get_file_contents
+context, cypher, get_file_contents, submit_unit_tests
 
 ### Budget: 15 tool calls maximum
-If budget runs low, reduce test cases per symbol rather than skipping symbols.
-Set priority to "low" and note limited analysis for symbols you couldn't fully examine.
 """
 
 INTEGRATION_PROMPT = """\

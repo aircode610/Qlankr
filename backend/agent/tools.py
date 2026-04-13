@@ -1,4 +1,5 @@
 import os
+import shutil
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -64,7 +65,7 @@ def _server_config() -> dict:
         },
     }
     # Only include GitNexus if the binary is available (not present in local dev)
-    if shutil.which("gitnexus"):
+    if shutil.which("gitnexus"):  # noqa: SIM108
         config["gitnexus"] = {
             "transport": "stdio",
             "command": "gitnexus",

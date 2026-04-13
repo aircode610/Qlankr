@@ -13,8 +13,8 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field, model_validator
 
-from agent.prompts import BASE_PROMPT, GATHER_PROMPT, SYSTEM_PROMPT
-from agent.tools import filter_tools, get_mcp_client
+from agent.prompts import SYSTEM_PROMPT
+from agent.tools import get_mcp_client
 from indexer import get_repo_name
 from models import (
     AffectedComponent,
@@ -52,97 +52,13 @@ class AnalysisState(TypedDict):
 # ── Graph nodes (stubs — implemented stage by stage) ─────────────────────────
 
 async def gather_node(state: AnalysisState) -> dict:
-    """
-    Stage 1: gather PR metadata, changed files, diff, and initial affected components.
-    Budget: 10 tool calls. Does not generate test specs — collect only.
-    """
-    print("[gather] starting MCP client...", flush=True)
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
-    print(f"[gather] got {len(all_tools)} tools, filtering to gather stage...", flush=True)
-    stage_tools = filter_tools(all_tools, "gather")
+    from agent.stages.gather import run_gather
+    return await run_gather(state, _llm)
 
-    # Output holder — agent calls submit_gather as its final action
-    class _GatherOutput(BaseModel):
-        pr_title: str
-        pr_description: str = ""
-        pr_author: str = ""
-        pr_files: list[str] = Field(default_factory=list)
-        pr_diff: str = ""
-        affected_components: list[dict] = Field(default_factory=list)
-
-    results: list[_GatherOutput] = []
-
-    def submit_gather(
-        pr_title: str,
-        pr_description: str = "",
-        pr_author: str = "",
-        pr_files: list = [],
-        pr_diff: str = "",
-        affected_components: list = [],
-    ) -> str:
-        results.append(_GatherOutput(
-            pr_title=pr_title,
-            pr_description=pr_description,
-            pr_author=pr_author,
-            pr_files=pr_files,
-            pr_diff=pr_diff,
-            affected_components=affected_components,
-        ))
-        return "Context gathered."
-
-    submit_tool = StructuredTool.from_function(
-        func=submit_gather,
-        name="submit_gather",
-        description=(
-            "Submit the gathered PR context when done collecting. "
-            "Pass: pr_title, pr_description, pr_author, "
-            "pr_files (list of changed file paths), pr_diff (full diff text), "
-            "affected_components (list of {component: str, files_changed: [str]})."
-        ),
-    )
-
-    repo_name = state.get("repo_name")
-    repo_clause = (
-        f'Repo "{repo_name}" is indexed in GitNexus. Pass repo="{repo_name}" to every GitNexus tool call.'
-        if repo_name
-        else "No indexed repo — use GitHub tools only."
-    )
-
-    agent = create_react_agent(
-        model=_llm,
-        tools=stage_tools + [submit_tool],
-        prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{GATHER_PROMPT}"),
-    )
-
-    tool_call_count = 0
-    async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=f"Gather context for: {state['pr_url']}\n{repo_clause}")]},
-        version="v2",
-        config={"recursion_limit": 30},
-    ):
-        if event["event"] == "on_tool_start":
-            tool_call_count += 1
-            print(f"  [{tool_call_count}/10] {event['name']}", flush=True)
-            if tool_call_count >= 10:
-                break
-
-    base_count = state.get("tool_calls_used", 0)
-    if not results:
-        return {"current_stage": "unit_tests", "tool_calls_used": base_count + tool_call_count}
-
-    r = results[-1]
-    return {
-        "current_stage": "unit_tests",
-        "tool_calls_used": base_count + tool_call_count,
-        "pr_metadata": {"title": r.pr_title, "description": r.pr_description, "author": r.pr_author},
-        "pr_files": r.pr_files,
-        "pr_diff": r.pr_diff,
-        "affected_components": r.affected_components,
-    }
 
 async def unit_tests_node(state: AnalysisState) -> dict:
-    raise NotImplementedError
+    from agent.stages.unit import run_unit
+    return await run_unit(state, _llm)
 
 def checkpoint_node(state: AnalysisState) -> dict:
     raise NotImplementedError
