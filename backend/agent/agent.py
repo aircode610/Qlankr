@@ -17,8 +17,10 @@ from models import (
     AffectedComponent,
     AgentStepEvent,
     AnalyzeResponse,
+    ContinueRequest,
     ErrorEvent,
     ResultEvent,
+    StageChangeEvent,
 )
 
 MAX_TOOL_CALLS = 25
@@ -67,7 +69,9 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
         name="submit_analysis",
         description=(
             "Submit the completed QA impact analysis. "
-            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array of component objects). "
+            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array). "
+            "Each component must include: component, files_changed, impact_summary, risks, confidence, "
+            "unit_tests (array of UnitTestSpec — may be empty), integration_tests (array of IntegrationTestSpec — may be empty). "
             "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
             "If you get a rejection message, correct the payload and call again."
         ),
@@ -78,15 +82,22 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
 
 async def run_agent(
     pr_url: str,
+    context: str | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
     """
     Entry point for PR impact analysis.
     Yields AgentStepEvent per tool call (for live trace), then ResultEvent or ErrorEvent.
     Called by main.py's POST /analyze handler.
+
+    ``context`` is optional user scenario text for E2E planning (Sprint 2).
+    ``session_id`` is reserved for LangGraph checkpoint resume (Dev A).
     """
     try:
         async with asyncio.timeout(TIMEOUT_SECONDS):
-            async for event in _run_agent_inner(pr_url):
+            async for event in _run_agent_inner(
+                pr_url, context=context, session_id=session_id
+            ):
                 yield event
     except TimeoutError:
         yield ErrorEvent(message=f"Analysis timed out after {TIMEOUT_SECONDS} seconds.")
@@ -150,6 +161,8 @@ def _wrap_mcp_tools(tools: list) -> list:
 
 async def _run_agent_inner(
     pr_url: str,
+    context: str | None = None,
+    session_id: str | None = None,
 ) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
     client = get_mcp_client()
     mcp_tools = _wrap_mcp_tools(await client.get_tools())
@@ -179,8 +192,17 @@ async def _run_agent_inner(
 
     tool_call_count = 0
 
+    user_message = f"Analyze this pull request: {pr_url}{repo_context}"
+    if context:
+        user_message += (
+            "\n\nAdditional user context (bug reports, repro steps, E2E scenarios):\n"
+            f"{context}"
+        )
+    if session_id:
+        user_message += f"\n\nClient session_id (for future checkpoint resume): {session_id}"
+
     async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=f"Analyze this pull request: {pr_url}{repo_context}")]},
+        {"messages": [HumanMessage(content=user_message)]},
         version="v2",
         config={"recursion_limit": 60},
     ):
@@ -201,13 +223,16 @@ async def _run_agent_inner(
         yield ErrorEvent(message="Agent did not submit an analysis result.")
         return
 
-    yield ResultEvent(**AnalyzeResponse(
-        pr_title=analysis_result.pr_title,
-        pr_url=analysis_result.pr_url,
-        pr_summary=analysis_result.pr_summary,
-        affected_components=analysis_result.affected_components,
-        agent_steps=tool_call_count,
-    ).model_dump())
+    yield ResultEvent(
+        **AnalyzeResponse(
+            pr_title=analysis_result.pr_title,
+            pr_url=analysis_result.pr_url,
+            pr_summary=analysis_result.pr_summary,
+            affected_components=analysis_result.affected_components,
+            e2e_test_plans=[],
+            agent_steps=tool_call_count,
+        ).model_dump()
+    )
 
 
 # ── Tool summary builders ─────────────────────────────────────────────────────
@@ -234,3 +259,32 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         return builder(tool_input) if builder else f"Calling tool: {tool_name}"
     except Exception:
         return f"Calling tool: {tool_name}"
+
+
+async def resume_agent(
+    session_id: str,
+    req: ContinueRequest,
+) -> AsyncIterator[StageChangeEvent | AgentStepEvent | ErrorEvent]:
+    """
+    Resume analysis after a checkpoint. Dev A owns full StateGraph resume logic;
+    this yields well-formed SSE events so the API contract can be exercised early.
+    """
+    from agent.sessions import get_session
+
+    if get_session(session_id) is None:
+        yield ErrorEvent(message="Session not found")
+        return
+
+    yield StageChangeEvent(
+        stage="gathering",
+        summary=(
+            f"Resume received (action={req.action!r}). "
+            "Full checkpoint orchestration will arrive with the Dev A merge."
+        ),
+    )
+    yield ErrorEvent(
+        message=(
+            "Checkpoint resume is not yet fully implemented — "
+            "pending Dev A StateGraph + checkpoint wiring."
+        ),
+    )

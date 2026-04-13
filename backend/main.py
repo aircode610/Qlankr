@@ -6,7 +6,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from indexer import get_graph_data, index_repo
-from models import AnalyzeRequest, ErrorEvent, IndexRequest
+from agent.sessions import get_session
+from models import (
+    AnalyzeRequest,
+    ContinueRequest,
+    ErrorEvent,
+    IndexRequest,
+    RunTestsRequest,
+)
 
 app = FastAPI()
 
@@ -122,14 +129,51 @@ async def debug_mcp_call(req: _DebugCallRequest):
 
 
 @app.post("/analyze")
-async def analyze(request: AnalyzeRequest):
-    # Wired to run_agent() in task A5 once Person B delivers agent/agent.py
+async def analyze(req: AnalyzeRequest):
     async def generate():
         try:
             from agent.agent import run_agent  # noqa: PLC0415
-            async for event in run_agent(request.pr_url):
+
+            async for event in run_agent(
+                pr_url=req.pr_url,
+                context=req.context,
+                session_id=req.session_id,
+            ):
                 yield sse_event(event)
         except ImportError:
             yield sse_event(ErrorEvent(message="Agent not yet implemented"))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/analyze/{session_id}/continue")
+async def continue_analysis(session_id: str, req: ContinueRequest):
+    if get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    async def generate():
+        try:
+            from agent.agent import resume_agent  # noqa: PLC0415
+
+            async for event in resume_agent(session_id, req):
+                yield sse_event(event)
+        except ImportError:
+            yield sse_event(ErrorEvent(message="Resume agent not yet implemented"))
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/analyze/{session_id}/status")
+async def analyze_session_status(session_id: str):
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.to_status_dict()
+
+
+@app.post("/run-tests")
+async def run_tests(_req: RunTestsRequest):
+    raise HTTPException(
+        status_code=501,
+        detail="Test execution runner is not enabled until Phase 4.",
+    )

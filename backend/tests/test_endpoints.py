@@ -3,7 +3,8 @@ from unittest.mock import patch
 import pytest
 
 import indexer
-from models import GraphCluster, GraphData, GraphNode
+from agent.sessions import create_session
+from models import AgentStepEvent, GraphCluster, GraphData, GraphNode
 from tests.conftest import parse_sse_body
 
 
@@ -80,3 +81,71 @@ async def test_graph_after_index_returns_data(client):
     assert len(data["nodes"]) == 1
     assert data["nodes"][0]["id"] == "n1"
     assert len(data["clusters"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_analyze_accepts_context_field(client):
+    async def fake_run(pr_url, context=None, session_id=None):
+        assert pr_url == "https://github.com/o/r/pull/1"
+        assert context == "users see a blank screen"
+        yield AgentStepEvent(tool="noop", summary="ok")
+
+    with patch("agent.agent.run_agent", fake_run):
+        response = await client.post(
+            "/analyze",
+            json={
+                "pr_url": "https://github.com/o/r/pull/1",
+                "context": "users see a blank screen",
+            },
+        )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    events = parse_sse_body(response.text)
+    assert any(e["event"] == "agent_step" for e in events)
+
+
+@pytest.mark.asyncio
+async def test_analyze_continue_unknown_session_returns_404(client):
+    response = await client.post(
+        "/analyze/not-a-real-id/continue",
+        json={"action": "approve"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_analyze_continue_known_session_streams(client):
+    session = create_session("https://github.com/o/r/pull/2")
+    response = await client.post(
+        f"/analyze/{session.session_id}/continue",
+        json={"action": "approve"},
+    )
+    assert response.status_code == 200
+    events = parse_sse_body(response.text)
+    assert len(events) >= 2
+    kinds = {e["event"] for e in events}
+    assert "stage_change" in kinds
+    assert "error" in kinds
+
+
+@pytest.mark.asyncio
+async def test_analyze_status_unknown_returns_404(client):
+    response = await client.get("/analyze/does-not-exist/status")
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_analyze_status_returns_payload(client):
+    session = create_session("https://github.com/o/r/pull/3")
+    response = await client.get(f"/analyze/{session.session_id}/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"] == session.session_id
+    assert data["current_stage"] == "gathering"
+    assert "created_at" in data
+
+
+@pytest.mark.asyncio
+async def test_run_tests_returns_501(client):
+    response = await client.post("/run-tests", json={"session_id": "abc"})
+    assert response.status_code == 501
