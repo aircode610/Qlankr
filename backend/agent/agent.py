@@ -3,11 +3,13 @@ import os
 import re
 import sys
 import traceback
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any, AsyncIterator, TypedDict
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field, model_validator
 
@@ -21,6 +23,76 @@ from models import (
     ErrorEvent,
     ResultEvent,
 )
+
+class AnalysisState(TypedDict):
+    # Input
+    pr_url: str
+    repo_name: str | None
+    user_context: str | None
+    session_id: str
+
+    # Pre-fetched context (populated by gather stage)
+    pr_diff: str
+    pr_files: list[str]
+    pr_metadata: dict
+    processes: list[dict]
+    repo_stats: dict
+
+    # Stage outputs
+    affected_components: list[dict]
+    integration_tests: list[dict]
+    e2e_test_plans: list[dict]
+
+    # Orchestration
+    current_stage: str
+    tool_calls_used: int
+    messages: list
+
+
+# ── Graph nodes (stubs — implemented stage by stage) ─────────────────────────
+
+async def gather_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+async def unit_tests_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+def checkpoint_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+async def integration_tests_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+async def e2e_planning_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+def submit_node(state: AnalysisState) -> dict:
+    raise NotImplementedError
+
+
+# ── Graph wiring ──────────────────────────────────────────────────────────────
+
+def build_analysis_graph():
+    graph = StateGraph(AnalysisState)
+
+    graph.add_node("gather", gather_node)
+    graph.add_node("unit_tests", unit_tests_node)
+    graph.add_node("checkpoint_unit", checkpoint_node)
+    graph.add_node("integration_tests", integration_tests_node)
+    graph.add_node("e2e_planning", e2e_planning_node)
+    graph.add_node("submit", submit_node)
+
+    graph.set_entry_point("gather")
+    graph.add_edge("gather", "unit_tests")
+    graph.add_edge("unit_tests", "checkpoint_unit")
+    graph.add_edge("checkpoint_unit", "integration_tests")
+    graph.add_edge("checkpoint_unit", "e2e_planning")
+    graph.add_edge("integration_tests", "submit")
+    graph.add_edge("e2e_planning", "submit")
+    graph.add_edge("submit", END)
+
+    return graph.compile(checkpointer=MemorySaver())
+
 
 MAX_TOOL_CALLS = 25
 TIMEOUT_SECONDS = 180
