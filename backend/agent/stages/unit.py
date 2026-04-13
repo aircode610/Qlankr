@@ -70,6 +70,13 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
         else "No diff available — use get_file_contents if needed."
     )
 
+    unit_feedback = state.get("unit_feedback")
+    feedback_section = (
+        f"\n## User Feedback (from previous run — address this)\n{unit_feedback}\n"
+        if unit_feedback
+        else ""
+    )
+
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
@@ -79,7 +86,8 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
     tool_call_count = 0
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=(
-            f"{diff_section}\n\n"
+            f"{diff_section}"
+            f"{feedback_section}\n\n"
             f"Process these components ONE AT A TIME in order:\n\n{components_block}\n\n"
             f"{repo_clause}\n\n"
             "For each component:\n"

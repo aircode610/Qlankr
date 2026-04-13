@@ -11,6 +11,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, model_validator
 
 from agent.prompts import SYSTEM_PROMPT
@@ -48,6 +49,10 @@ class AnalysisState(TypedDict):
     tool_calls_used: int
     messages: list
 
+    # Human-in-the-loop
+    user_choice: str | None        # "integration" | "e2e" — set by choice_node
+    unit_feedback: str | None      # user refinement feedback for unit rerun
+
 
 # ── Graph nodes (stubs — implemented stage by stage) ─────────────────────────
 
@@ -61,20 +66,118 @@ async def unit_tests_node(state: AnalysisState) -> dict:
     return await run_unit(state, _llm)
 
 def checkpoint_node(state: AnalysisState) -> dict:
-    raise NotImplementedError
+    """
+    Human-in-the-loop after unit tests.
+    Shows unit test results; user can approve (→ choice) or refine (→ rerun unit_tests).
+    """
+    components_summary = [
+        {
+            "component": c.get("component"),
+            "files_changed": c.get("files_changed", []),
+            "unit_tests": c.get("unit_tests", []),
+        }
+        for c in state.get("affected_components", [])
+    ]
+
+    response = interrupt({
+        "type": "checkpoint",
+        "stage_completed": "unit_testing",
+        "intermediate_result": {
+            "pr_metadata": state.get("pr_metadata", {}),
+            "affected_components": components_summary,
+        },
+        "prompt": (
+            "Unit tests generated. Review the results above.\n"
+            "  approve — proceed to choose next stage\n"
+            "  refine  — provide feedback to improve the unit tests"
+        ),
+    })
+
+    action = response.get("action", "approve")
+    if action == "refine":
+        return {
+            "current_stage": "unit_tests",
+            "unit_feedback": response.get("feedback", ""),
+        }
+
+    return {
+        "current_stage": "choice",
+        "unit_feedback": None,
+    }
+
+
+def choice_node(state: AnalysisState) -> dict:
+    """
+    Human-in-the-loop: user picks 'integration' or 'e2e'.
+    """
+    response = interrupt({
+        "type": "choice",
+        "options": ["integration", "e2e"],
+        "prompt": (
+            "Unit tests approved. Which tests do you want to run next?\n"
+            "  integration — find cross-module integration points and generate test specs\n"
+            "  e2e         — plan end-to-end user-facing test scenarios"
+        ),
+    })
+
+    choice = response.get("choice", "integration")
+    return {
+        "user_choice": choice,
+        "current_stage": choice,
+    }
+
+
+def e2e_checkpoint_node(state: AnalysisState) -> dict:
+    """
+    Human-in-the-loop before E2E planning.
+    Asks user for any upfront context (user flows, bug reports, scenarios).
+    """
+    response = interrupt({
+        "type": "e2e_context",
+        "prompt": (
+            "Before planning E2E tests, do you have any context to share?\n"
+            "For example: user flows, bug reports, feature descriptions, known edge cases.\n"
+            "Leave empty to let the agent figure it out from the PR."
+        ),
+    })
+
+    context = response.get("context", "")
+    return {
+        "user_context": context or state.get("user_context"),
+        "current_stage": "e2e_planning",
+    }
+
 
 async def integration_tests_node(state: AnalysisState) -> dict:
     from agent.stages.integration import run_integration
     return await run_integration(state, _llm)
 
+
 async def e2e_planning_node(state: AnalysisState) -> dict:
-    raise NotImplementedError
+    from agent.stages.e2e import run_e2e
+    return await run_e2e(state, _llm)
+
 
 def submit_node(state: AnalysisState) -> dict:
-    raise NotImplementedError
+    """
+    Final node — marks analysis complete.
+    The graph runner reads affected_components and e2e_test_plans from state.
+    """
+    return {"current_stage": "done"}
 
 
 # ── Graph wiring ──────────────────────────────────────────────────────────────
+
+def _checkpoint_router(state: AnalysisState) -> str:
+    """After checkpoint_unit: rerun unit_tests or proceed to choice."""
+    return state.get("current_stage", "choice")
+
+
+def _choice_router(state: AnalysisState) -> str:
+    """After choice_node: route to integration_tests or e2e_checkpoint."""
+    choice = state.get("user_choice", "integration")
+    return "e2e_checkpoint" if choice == "e2e" else "integration_tests"
+
 
 def build_analysis_graph():
     graph = StateGraph(AnalysisState)
@@ -82,15 +185,31 @@ def build_analysis_graph():
     graph.add_node("gather", gather_node)
     graph.add_node("unit_tests", unit_tests_node)
     graph.add_node("checkpoint_unit", checkpoint_node)
+    graph.add_node("choice", choice_node)
     graph.add_node("integration_tests", integration_tests_node)
+    graph.add_node("e2e_checkpoint", e2e_checkpoint_node)
     graph.add_node("e2e_planning", e2e_planning_node)
     graph.add_node("submit", submit_node)
 
     graph.set_entry_point("gather")
     graph.add_edge("gather", "unit_tests")
     graph.add_edge("unit_tests", "checkpoint_unit")
-    graph.add_edge("checkpoint_unit", "integration_tests")
-    graph.add_edge("checkpoint_unit", "e2e_planning")
+
+    # After unit checkpoint: approve → choice, refine → back to unit_tests
+    graph.add_conditional_edges(
+        "checkpoint_unit",
+        _checkpoint_router,
+        {"unit_tests": "unit_tests", "choice": "choice"},
+    )
+
+    # After choice: integration or e2e branch
+    graph.add_conditional_edges(
+        "choice",
+        _choice_router,
+        {"integration_tests": "integration_tests", "e2e_checkpoint": "e2e_checkpoint"},
+    )
+
+    graph.add_edge("e2e_checkpoint", "e2e_planning")
     graph.add_edge("integration_tests", "submit")
     graph.add_edge("e2e_planning", "submit")
     graph.add_edge("submit", END)

@@ -222,12 +222,17 @@ that a QA tester can execute manually. Write for a tester, not a developer.
 }
 ```
 
+### Rules
+- MUST call `submit_e2e_plans` once when done — text output is ignored
+- Prioritise CRITICAL processes first
+- If budget runs low, output plans for higher-priority processes only
+- Use `ask_user` when you need information you cannot determine from the PR or code
+  (e.g. expected user-facing behaviour, exact UX flow, domain rules). Ask specific questions.
+
 ### Allowed tools
-impact, query, cypher, list_processes, get_process
+impact, query, cypher, list_processes, get_process, ask_user, submit_e2e_plans
 
 ### Budget: 20 tool calls maximum
-Prioritise CRITICAL processes first. If budget runs low, output plans for higher-priority
-processes only and note which processes were not covered.
 """
 
 # ── Utility messages ──────────────────────────────────────────────────────────
