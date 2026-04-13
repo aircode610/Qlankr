@@ -208,7 +208,7 @@ async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
                 flush=True,
             )
         else:
-            print("[indexer] cypher tool not found - graph will be empty", flush=True)
+            print("[indexer] cypher tool not found — graph will be empty", flush=True)
 
     except Exception as e:
         print(f"[indexer] _fetch_stats_and_graph error: {e}", flush=True)

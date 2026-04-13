@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import traceback
+import unicodedata
 from typing import Annotated, Any, AsyncIterator, TypedDict
 
 from langchain_anthropic import ChatAnthropic
@@ -12,7 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import interrupt
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 from agent.prompts import SYSTEM_PROMPT
 from agent.tools import get_mcp_client
@@ -240,32 +241,22 @@ class _AnalysisResult(BaseModel):
     affected_components: Annotated[list[AffectedComponent], Field(min_length=1)]
 
 
-class _SubmitAnalysisToolArgs(BaseModel):
-    """Single `analysis` dict validated inside the tool so partial payloads become ToolMessages, not crashes."""
-
-    analysis: dict = Field(
-        description=(
-            "Complete analysis object. Required keys: pr_title (string), pr_url (string), "
-            "pr_summary (string), affected_components (non-empty array). "
-            "Each element of affected_components must have: component, impact_summary, confidence "
-            '("high"|"medium"|"low"); optional: files_changed, risks (arrays of strings), '
-            "test_suggestions with skip, run, deeper (arrays of strings, may be empty). "
-            "You may instead pass those keys at the top level of the tool input (without nesting under analysis)."
-        )
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_flat_or_nested(cls, data: Any) -> Any:
-        if isinstance(data, dict) and "analysis" not in data:
-            return {"analysis": data}
-        return data
-
-
 def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
-    def submit_analysis(analysis: dict) -> str:
+    def submit_analysis(
+        pr_title: str,
+        pr_url: str,
+        pr_summary: str,
+        affected_components: list,
+    ) -> str:
         try:
-            parsed = _AnalysisResult.model_validate(analysis)
+            parsed = _AnalysisResult.model_validate(
+                {
+                    "pr_title": pr_title,
+                    "pr_url": pr_url,
+                    "pr_summary": pr_summary,
+                    "affected_components": affected_components,
+                }
+            )
         except Exception as e:
             return (
                 "submit_analysis rejected ? fix the payload and call submit_analysis again. "
@@ -279,12 +270,10 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
         name="submit_analysis",
         description=(
             "Submit the completed QA impact analysis. "
-            "Pass one argument: `analysis`, a single JSON object with pr_title, pr_url, pr_summary, "
-            "and affected_components (non-empty array of component objects). "
-            "Call exactly once with a valid payload when done ? this is your ONLY way to return the result. "
-            "If you get a rejection message, correct the object and call again."
+            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array of component objects). "
+            "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
+            "If you get a rejection message, correct the payload and call again."
         ),
-        args_schema=_SubmitAnalysisToolArgs,
     )
 
 
@@ -314,11 +303,60 @@ def _extract_owner_repo(pr_url: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
+# ── Unicode sanitization ──────────────────────────────────────────────────────
+# Neo4j (used by GitNexus MCP) fails on non-latin-1 characters in arguments.
+# Normalize typographic characters to ASCII equivalents before tool dispatch.
+
+_UNICODE_MAP = str.maketrans({
+    "\u2014": "--",   # em dash
+    "\u2013": "-",    # en dash
+    "\u2018": "'",    # left single quote
+    "\u2019": "'",    # right single quote
+    "\u201c": '"',    # left double quote
+    "\u201d": '"',    # right double quote
+    "\u2026": "...",  # ellipsis
+    "\u00a0": " ",    # non-breaking space
+    "\u2022": "*",    # bullet
+})
+
+
+def _sanitize(value: Any) -> Any:
+    if isinstance(value, str):
+        return unicodedata.normalize("NFKC", value).translate(_UNICODE_MAP)
+    if isinstance(value, dict):
+        return {k: _sanitize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize(v) for v in value]
+    return value
+
+
+def _wrap_mcp_tools(tools: list) -> list:
+    """Wrap each MCP tool to sanitize non-ASCII characters in its inputs."""
+    wrapped = []
+    for tool in tools:
+        original_func = tool.func
+        original_coro = tool.coroutine
+
+        if original_coro is not None:
+            async def _acall(*args: Any, _coro=original_coro, **kwargs: Any) -> Any:
+                return await _coro(*args, **_sanitize(kwargs))
+            wrapped_tool = tool.copy(update={"coroutine": _acall, "func": None})
+        elif original_func is not None:
+            def _call(*args: Any, _fn=original_func, **kwargs: Any) -> Any:
+                return _fn(*args, **_sanitize(kwargs))
+            wrapped_tool = tool.copy(update={"func": _call})
+        else:
+            wrapped_tool = tool
+
+        wrapped.append(wrapped_tool)
+    return wrapped
+
+
 async def _run_agent_inner(
     pr_url: str,
 ) -> AsyncIterator[AgentStepEvent | ResultEvent | ErrorEvent]:
     client = get_mcp_client()
-    mcp_tools = await client.get_tools()
+    mcp_tools = _wrap_mcp_tools(await client.get_tools())
 
     submit_results: list[_AnalysisResult] = []
     agent = create_react_agent(

@@ -53,24 +53,32 @@ _STAGE_TOOLS: dict[str, set[str]] = {
 
 def _server_config() -> dict:
     import shutil
+    utf8_env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+    }
     config = {
         "github": {
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-github"],
             "env": {
-                **os.environ,
+                **utf8_env,
+                # The GitHub MCP server expects GITHUB_PERSONAL_ACCESS_TOKEN
                 "GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_TOKEN", ""),
             },
         },
     }
     # Only include GitNexus if the binary is available (not present in local dev)
-    if shutil.which("gitnexus"):  # noqa: SIM108
+    if shutil.which("gitnexus"):
         config["gitnexus"] = {
             "transport": "stdio",
             "command": "gitnexus",
             "args": ["mcp"],
-            "env": {**os.environ},
+            "env": utf8_env,
         }
     return config
 
