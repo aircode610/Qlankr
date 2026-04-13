@@ -41,35 +41,35 @@ async def prefetch_context(pr_url: str, repo_name: str | None) -> dict:
 async def _fetch(repo_name: str) -> dict:
     result: dict = {"processes": [], "stats": {}, "changed_symbols": []}
 
-    async with get_mcp_client() as client:
-        tools = await client.get_tools()
-        tool_map = {t.name: t for t in tools}
+    client = get_mcp_client()
+    tools = await client.get_tools()
+    tool_map = {t.name: t for t in tools}
 
-        # ── Repo stats via list_repos ─────────────────────────────────────────
-        if "list_repos" in tool_map:
-            try:
-                raw = await tool_map["list_repos"].ainvoke({})
-                for rec in _to_records(raw):
-                    rname = rec.get("name", "")
-                    rpath = rec.get("path", "")
-                    if rname == repo_name or str(rpath).endswith(f"/{repo_name}"):
-                        s = rec.get("stats", {})
-                        if isinstance(s, dict):
-                            result["stats"] = {
-                                "files": int(s.get("files", 0)),
-                                "nodes": int(s.get("nodes", 0)),
-                                "edges": int(s.get("edges", 0)),
-                                "communities": int(s.get("communities", 0)),
-                                "processes": int(s.get("processes", 0)),
-                            }
-                        break
-                print(f"[prefetch] stats: {result['stats']}", flush=True)
-            except Exception as e:
-                print(f"[prefetch] list_repos error: {e}", flush=True)
+    # ── Repo stats via list_repos ─────────────────────────────────────────────
+    if "list_repos" in tool_map:
+        try:
+            raw = await tool_map["list_repos"].ainvoke({})
+            for rec in _to_records(raw):
+                rname = rec.get("name", "")
+                rpath = rec.get("path", "")
+                if rname == repo_name or str(rpath).endswith(f"/{repo_name}"):
+                    s = rec.get("stats", {})
+                    if isinstance(s, dict):
+                        result["stats"] = {
+                            "files": int(s.get("files", 0)),
+                            "nodes": int(s.get("nodes", 0)),
+                            "edges": int(s.get("edges", 0)),
+                            "communities": int(s.get("communities", 0)),
+                            "processes": int(s.get("processes", 0)),
+                        }
+                    break
+            print(f"[prefetch] stats: {result['stats']}", flush=True)
+        except Exception as e:
+            print(f"[prefetch] list_repos error: {e}", flush=True)
 
-        # ── Process list via resource URI, falling back to Cypher ─────────────
-        result["processes"] = await _fetch_processes(client, tool_map, repo_name)
-        print(f"[prefetch] processes fetched: {len(result['processes'])}", flush=True)
+    # ── Process list via resource URI, falling back to Cypher ─────────────────
+    result["processes"] = await _fetch_processes(client, tool_map, repo_name)
+    print(f"[prefetch] processes fetched: {len(result['processes'])}", flush=True)
 
     return result
 

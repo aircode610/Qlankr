@@ -63,7 +63,11 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
             "Submit the gathered PR context when done collecting. "
             "Pass: pr_title, pr_description, pr_author, "
             "pr_files (list of changed file paths), pr_diff (full diff text), "
-            "affected_components (list of {component: str, files_changed: [str]})."
+            "affected_components (list of objects, each with: "
+            "component (str), files_changed ([str]), "
+            "impact_summary (str — 1-2 sentences on what breaks), "
+            "risks ([str] — specific risk strings), "
+            "confidence ('high'|'medium'|'low'))."
         ),
     )
 
@@ -89,7 +93,7 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
         if event["event"] == "on_tool_start":
             tool_call_count += 1
             print(f"  [{tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if tool_call_count >= BUDGET:
+            if event["name"] != "submit_gather" and tool_call_count >= BUDGET:
                 break
 
     base_count = state.get("tool_calls_used", 0)

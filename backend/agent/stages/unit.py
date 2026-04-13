@@ -84,6 +84,9 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
     )
 
     tool_call_count = 0
+    submit_count = 0
+    expected_submits = len(components)
+
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=(
             f"{diff_section}"
@@ -103,7 +106,11 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
         if event["event"] == "on_tool_start":
             tool_call_count += 1
             print(f"  [unit {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if event["name"] != "submit_unit_tests" and tool_call_count >= BUDGET:
+            if event["name"] == "submit_unit_tests":
+                submit_count += 1
+                if submit_count >= expected_submits:
+                    break  # All components submitted — don't wait for agent's final text
+            elif tool_call_count >= BUDGET:
                 break
 
     updated = [

@@ -71,8 +71,8 @@ Key facts:
 GATHER_PROMPT = """\
 ## Current Stage: Context Gathering
 
-Your goal is to pre-fetch all context the downstream stages need.
-COLLECT only ? do not analyse, generate test specs, or draw conclusions yet.
+Your goal is to pre-fetch all context the downstream stages need AND perform
+an initial impact assessment per component.
 
 ### Your task
 1. Fetch PR metadata: title, description, author via `get_pull_request`
@@ -80,23 +80,29 @@ COLLECT only ? do not analyse, generate test specs, or draw conclusions yet.
 3. For each changed file, find its defined symbols via Cypher:
    MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
    AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 30
-4. Fetch the repo's process list via `list_repos` (stats include process count and names)
-5. Write an initial `affected_components` list: component name + changed files.
-   No test specs yet ? just names and file paths.
+4. For key symbols, call `impact` to get blast radius and risk level
+5. Group changed files into logical components and for each produce:
+   - component: short descriptive name
+   - files_changed: list of file paths
+   - impact_summary: 1-2 sentence plain-English description of what breaks if this changes
+   - risks: list of specific risk strings (e.g. "save corruption if X is called before Y")
+   - confidence: "high" (symbol in graph, callers found) | "medium" (partial data) |
+                 "low" (new file, no graph data yet)
 
 ### Output
-Populate state with:
-- pr_diff, pr_files, pr_metadata
-- processes (list of {name, description})
-- affected_components (list of {component, files_changed})
+Call `submit_gather` with:
+- pr_title, pr_description, pr_author, pr_files, pr_diff
+- affected_components — list of objects with ALL five fields above
 
 ### Allowed tools
 get_pull_request, get_pull_request_files, get_pull_request_comments,
 get_file_contents, list_directory, search_code, get_commits,
-list_repos, cypher, detect_changes
+list_repos, impact, cypher, detect_changes
 
 ### Budget: 10 tool calls maximum
 Stop and output what you have when you reach 10 calls.
+Use confidence="low" and a best-effort impact_summary for any component you
+couldn't fully analyse before hitting the budget.
 """
 
 UNIT_PROMPT = """\

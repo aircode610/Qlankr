@@ -18,10 +18,12 @@ class TestSuggestions(BaseModel):
 class AffectedComponent(BaseModel):
     component: str
     files_changed: list[str] = Field(default_factory=list)
-    impact_summary: str
+    impact_summary: str = ""
     risks: list[str] = Field(default_factory=list)
     test_suggestions: TestSuggestions = Field(default_factory=TestSuggestions)
-    confidence: Literal["high", "medium", "low"]
+    confidence: Literal["high", "medium", "low"] = "low"
+    unit_tests: list[dict] = Field(default_factory=list)
+    integration_tests: list[dict] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):
@@ -29,6 +31,7 @@ class AnalyzeResponse(BaseModel):
     pr_url: str
     pr_summary: str
     affected_components: list[AffectedComponent]
+    e2e_test_plans: list[dict] = Field(default_factory=list)
     agent_steps: int
 
 

@@ -18,6 +18,7 @@ GATHER_TOOLS: set[str] = {
     "search_code",
     "get_commits",
     "list_repos",
+    "impact",
     "cypher",
     "detect_changes",
 }

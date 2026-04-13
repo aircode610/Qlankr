@@ -219,7 +219,7 @@ def build_analysis_graph():
 
 
 MAX_TOOL_CALLS = 25
-TIMEOUT_SECONDS = 180
+TIMEOUT_SECONDS = 300
 
 # ── Graph singleton ───────────────────────────────────────────────────────────
 # MemorySaver stores checkpoint state in-process — must be the same instance
@@ -372,6 +372,11 @@ async def _start_graph(
     if owner_repo:
         repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
 
+    # Pre-fetch GitNexus process list + repo stats before graph starts
+    # so gather/e2e stages don't waste tool call budget on basic context.
+    from agent.prefetch import prefetch_context
+    prefetched = await prefetch_context(pr_url, repo_name)
+
     initial_state: AnalysisState = {
         "pr_url": pr_url,
         "repo_name": repo_name,
@@ -380,8 +385,8 @@ async def _start_graph(
         "pr_diff": "",
         "pr_files": [],
         "pr_metadata": {},
-        "processes": [],
-        "repo_stats": {},
+        "processes": prefetched["processes"],
+        "repo_stats": prefetched["stats"],
         "affected_components": [],
         "integration_tests": [],
         "e2e_test_plans": [],
@@ -426,15 +431,19 @@ async def _stream_graph(
     Drive the graph, mapping LangGraph events to SSE events.
     After the stream ends, checks state for interrupt or completion.
     """
+    emitted_stages: set[str] = set()
+
     async for event in graph.astream_events(input_or_command, version="v2", config=config):
         event_type = event["event"]
         node_name = event.get("metadata", {}).get("langgraph_node", "")
 
         if event_type == "on_chain_start" and node_name in _STAGE_NODES:
-            yield StageChangeEvent(
-                stage=node_name,
-                summary=f"Starting {node_name.replace('_', ' ')}",
-            )
+            if node_name not in emitted_stages:
+                emitted_stages.add(node_name)
+                yield StageChangeEvent(
+                    stage=node_name,
+                    summary=f"Starting {node_name.replace('_', ' ')}",
+                )
 
         elif event_type == "on_tool_start":
             tool_name = event["name"]
@@ -466,12 +475,27 @@ async def _stream_graph(
             yield ErrorEvent(message="Analysis completed but produced no affected components.")
             return
 
+        normalized = [
+            {
+                "component": c.get("component", "Unknown"),
+                "files_changed": c.get("files_changed", []),
+                "impact_summary": c.get("impact_summary", ""),
+                "risks": c.get("risks", []),
+                "test_suggestions": c.get("test_suggestions", {"skip": [], "run": [], "deeper": []}),
+                "confidence": c.get("confidence", "low"),
+                "unit_tests": c.get("unit_tests", []),
+                "integration_tests": c.get("integration_tests", []),
+            }
+            for c in components
+        ]
+
         pr_meta = final.get("pr_metadata", {})
         yield ResultEvent(
             pr_title=pr_meta.get("title", pr_url),
             pr_url=pr_url,
             pr_summary=pr_meta.get("description", ""),
-            affected_components=components,
+            affected_components=normalized,
+            e2e_test_plans=final.get("e2e_test_plans", []),
             agent_steps=final.get("tool_calls_used", 0),
         )
 
