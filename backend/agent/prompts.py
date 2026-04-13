@@ -176,12 +176,15 @@ For each changed symbol:
 }
 ```
 
+### Rules
+- MUST call `submit_integration_tests` once when done — text output is ignored
+- Only report integration points you found via tools — do not guess
+- Rate risk based on blast radius depth and process involvement
+
 ### Allowed tools
-impact, context, query, cypher
+impact, context, query, cypher, submit_integration_tests
 
 ### Budget: 15 tool calls maximum
-Do not guess module boundaries ? only report integrations you found via tools.
-Rate risk based on blast radius depth and process involvement.
 """
 
 E2E_PROMPT = """\

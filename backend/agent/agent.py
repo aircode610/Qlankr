@@ -64,7 +64,8 @@ def checkpoint_node(state: AnalysisState) -> dict:
     raise NotImplementedError
 
 async def integration_tests_node(state: AnalysisState) -> dict:
-    raise NotImplementedError
+    from agent.stages.integration import run_integration
+    return await run_integration(state, _llm)
 
 async def e2e_planning_node(state: AnalysisState) -> dict:
     raise NotImplementedError
