@@ -3,6 +3,7 @@
 **Branch:** `devc/testing-models`
 **Merges:** First (all other branches depend on this)
 **Files owned:**
+
 - `backend/models.py` (primary ownership — canonical source of truth)
 - `backend/main.py` (endpoint signatures, routing, SSE wiring)
 - `backend/agent/sessions.py` — NEW: session state store
@@ -236,6 +237,7 @@ class TestRunDoneEvent(BaseModel):
 ## File: backend/main.py — API Endpoints
 
 ### Existing endpoints (keep as-is)
+
 - `GET /health`
 - `POST /index` — SSE stream, uses `IndexStepEvent`, `IndexDoneEvent`
 - `GET /graph/{owner}/{repo}` — returns `GraphData`
@@ -243,7 +245,7 @@ class TestRunDoneEvent(BaseModel):
 
 ### Updated endpoint
 
-**`POST /analyze`** — now accepts `AnalyzeRequest` (with optional `context` and `session_id`)
+`**POST /analyze**` — now accepts `AnalyzeRequest` (with optional `context` and `session_id`)
 
 ```python
 @app.post("/analyze")
@@ -262,7 +264,7 @@ SSE event types emitted: `agent_step`, `stage_change`, `checkpoint`, `result`, `
 
 ### New endpoints
 
-**`POST /analyze/{session_id}/continue`** — resume after checkpoint
+`**POST /analyze/{session_id}/continue**` — resume after checkpoint
 
 ```python
 @app.post("/analyze/{session_id}/continue")
@@ -273,7 +275,7 @@ async def continue_analysis(session_id: str, req: ContinueRequest):
     return StreamingResponse(stream(), media_type="text/event-stream")
 ```
 
-**`GET /analyze/{session_id}/status`** — get session state
+`**GET /analyze/{session_id}/status**` — get session state
 
 ```python
 @app.get("/analyze/{session_id}/status")
@@ -284,7 +286,7 @@ async def session_status(session_id: str):
     return session.to_status_dict()
 ```
 
-**`POST /run-tests`** (Phase 4)
+`**POST /run-tests**` (Phase 4)
 
 ```python
 @app.post("/run-tests")
@@ -426,36 +428,39 @@ async def execute_tests(session_id: str):
 
 Resource limits (enforced here, container image built by Dev B):
 
-| Limit | Value |
-|-------|-------|
-| Memory | 512 MB |
-| CPU | 50% of 1 core |
-| Timeout | 300 seconds |
-| Network | Disabled |
-| Disk | 1 GB |
+
+| Limit   | Value         |
+| ------- | ------------- |
+| Memory  | 512 MB        |
+| CPU     | 50% of 1 core |
+| Timeout | 300 seconds   |
+| Network | Disabled      |
+| Disk    | 1 GB          |
+
 
 ---
 
 ## Acceptance Criteria
 
-- [ ] All new Pydantic models validate correctly (write pytest tests for each)
-- [ ] `POST /analyze` accepts `context` and `session_id` without breaking existing callers (both fields optional)
-- [ ] `POST /analyze/{session_id}/continue` returns 404 for unknown sessions, streams events for valid ones
-- [ ] `GET /analyze/{session_id}/status` returns current stage + partial results
-- [ ] All SSE events serialize cleanly via `model_dump_json()`
-- [ ] Existing Sprint 1 endpoints (`/index`, `/graph`, `/health`, `/debug/*`) unchanged
-- [ ] Phase 4 test execution endpoints stubbed (return 501) until Phase 4 begins
-- [ ] `create_session()` / `get_session()` / `update_session()` work correctly (unit tests)
-- [ ] Session `to_status_dict()` returns correct fields
-- [ ] `execute_tests()` streams `TestRunEvent` per result and `TestRunDoneEvent` at completion
-- [ ] Container is destroyed after execution (even on error)
-- [ ] Memory/CPU/network limits enforced in container config
+- All new Pydantic models validate correctly (write pytest tcepts `context`ests for each)
+- `POST /analyze` ac and `session_id` without breaking existing callers (both fields optional)
+- `POST /analyze/{session_id}/continue` returns 404 for unknown sessions, streams events for valid ones
+- `GET /analyze/{session_id}/status` returns current stage + partial results
+- All SSE events serialize cleanly via `model_dump_json()`
+- Existing Sprint 1 endpoints (`/index`, `/graph`, `/health`, `/debug/*`) unchanged
+- Phase 4 test execution endpoints stubbed (return 501) until Phase 4 begins
+- `create_session()` / `get_session()` / `update_session()` work correctly (unit tests)
+- Session `to_status_dict()` returns correct fields
+- `execute_tests()` streams `TestRunEvent` per result and `TestRunDoneEvent` at completion
+- Container is destroyed after execution (even on error)
+- Memory/CPU/network limits enforced in container config
 
 ---
 
 ## Testing
 
 Add to `backend/tests/test_models.py`:
+
 - Validation tests for every new model (valid + invalid payloads)
 - `UnitTestSpec` with empty `mocks_needed` and `None` `generated_code`
 - `IntegrationTestSpec` risk_level literal validation
@@ -464,15 +469,19 @@ Add to `backend/tests/test_models.py`:
 - `ContinueRequest` action literal validation
 
 Add to `backend/tests/test_endpoints.py`:
+
 - `/analyze` with `context` field
 - `/analyze/{session_id}/continue` with valid/invalid session
 - `/analyze/{session_id}/status` 404 case
 
 Add to `backend/tests/test_sessions.py` (new):
+
 - `create_session()` generates unique IDs
 - `get_session()` returns None for unknown IDs
 - `update_session()` modifies only specified fields
 
 Add to `backend/tests/test_executor.py` (new, Phase 4):
+
 - Mock docker client, test `execute_tests()` streams events correctly
 - Test container cleanup on success and on exception
+

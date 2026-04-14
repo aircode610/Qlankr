@@ -3,16 +3,81 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+# ─── Requests ────────────────────────────────────────────────────────────────
+
+
+class IndexRequest(BaseModel):
+    repo_url: str  # e.g. https://github.com/owner/repo
+
+
 class AnalyzeRequest(BaseModel):
     pr_url: str
-    context: str | None = None      # optional bug report / scenario for E2E stage
-    session_id: str | None = None   # provide to resume from a checkpoint
+    context: str | None = None      # optional bug report or user scenario for E2E stage
+    session_id: str | None = None   # set when resuming after a checkpoint
 
 
-class TestSuggestions(BaseModel):
-    skip: list[str] = Field(default_factory=list)
-    run: list[str] = Field(default_factory=list)
-    deeper: list[str] = Field(default_factory=list)
+class ContinueRequest(BaseModel):
+    """Sent to POST /analyze/{session_id}/continue after a checkpoint pause."""
+
+    action: Literal["approve", "add_context", "skip", "rerun"]
+    additional_context: str | None = None
+
+
+# ─── Stage 1: Unit Tests ─────────────────────────────────────────────────────
+
+
+class UnitTestCase(BaseModel):
+    name: str  # e.g. "rejects when inventory full"
+    scenario: str  # setup / input description
+    expected: str  # expected outcome
+
+
+class UnitTestSpec(BaseModel):
+    target: str  # symbol under test, e.g. "PlayerInventory.addItem"
+    test_cases: list[UnitTestCase]
+    mocks_needed: list[str] = Field(default_factory=list)
+    priority: Literal["high", "medium", "low"]
+    generated_code: str | None = None  # Phase 4: actual executable test code
+
+
+# ─── Stage 2: Integration Tests ──────────────────────────────────────────────
+
+
+class IntegrationTestCase(BaseModel):
+    name: str
+    scenario: str
+    expected: str
+
+
+class IntegrationTestSpec(BaseModel):
+    integration_point: str  # e.g. "PlayerInventory <> CraftingSystem"
+    modules_involved: list[str]  # e.g. ["inventory", "crafting"]
+    test_cases: list[IntegrationTestCase]
+    data_setup: str  # preconditions / fixture description
+    risk_level: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    generated_code: str | None = None
+
+
+# ─── Stage 3: E2E Test Plan ──────────────────────────────────────────────────
+
+
+class E2ETestStep(BaseModel):
+    step: int
+    action: str
+    expected: str
+
+
+class E2ETestPlan(BaseModel):
+    process: str  # GitNexus process name
+    scenario: str  # human-readable scenario title
+    steps: list[E2ETestStep]
+    preconditions: str
+    affected_by_pr: list[str] = Field(default_factory=list)
+    priority: Literal["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    estimated_duration: str  # e.g. "5 min"
+
+
+# ─── Affected Component (updated) ────────────────────────────────────────────
 
 
 class AffectedComponent(BaseModel):
@@ -20,10 +85,9 @@ class AffectedComponent(BaseModel):
     files_changed: list[str] = Field(default_factory=list)
     impact_summary: str = ""
     risks: list[str] = Field(default_factory=list)
-    test_suggestions: TestSuggestions = Field(default_factory=TestSuggestions)
     confidence: Literal["high", "medium", "low"] = "low"
-    unit_tests: list[dict] = Field(default_factory=list)
-    integration_tests: list[dict] = Field(default_factory=list)
+    unit_tests: list[UnitTestSpec] = Field(default_factory=list)
+    integration_tests: list[IntegrationTestSpec] = Field(default_factory=list)
 
 
 class AnalyzeResponse(BaseModel):
@@ -31,11 +95,12 @@ class AnalyzeResponse(BaseModel):
     pr_url: str
     pr_summary: str
     affected_components: list[AffectedComponent]
-    e2e_test_plans: list[dict] = Field(default_factory=list)
+    e2e_test_plans: list[E2ETestPlan] = Field(default_factory=list)
     agent_steps: int
 
 
-# SSE event payloads
+# ─── SSE Events ──────────────────────────────────────────────────────────────
+
 
 class AgentStepEvent(BaseModel):
     type: Literal["agent_step"] = "agent_step"
@@ -43,28 +108,48 @@ class AgentStepEvent(BaseModel):
     summary: str
 
 
+class StageChangeEvent(BaseModel):
+    type: Literal["stage_change"] = "stage_change"
+    stage: str  # graph node name: gather, unit_tests, checkpoint_unit, choice, etc.
+    summary: str
+
+
+class CheckpointEvent(BaseModel):
+    type: Literal["checkpoint"] = "checkpoint"
+    session_id: str
+    stage_completed: str
+    interrupt_type: str = "checkpoint"  # "checkpoint" | "choice" | "e2e_context" | "question"
+    payload: dict = Field(default_factory=dict)  # interrupt data (intermediate_result, prompt, options, etc.)
+
+
 class ErrorEvent(BaseModel):
     type: Literal["error"] = "error"
     message: str
 
 
-# Index SSE event models
+class ResultEvent(AnalyzeResponse):
+    type: Literal["result"] = "result"
+
+
+# ─── Index SSE Events (unchanged from Sprint 1) ─────────────────────────────
+
 
 class IndexStepEvent(BaseModel):
     type: Literal["index_step"] = "index_step"
-    stage: str  # "clone" | "analyze" | "structure" | "parsing" | "resolution" | "clustering" | "processes" | "search"
+    stage: str
     summary: str
 
 
 class IndexDoneEvent(BaseModel):
     type: Literal["index_done"] = "index_done"
-    repo: str  # "owner/repo"
+    repo: str
     files: int
     clusters: int
     symbols: int
 
 
-# Graph / viz models
+# ─── Graph / Viz Models (unchanged from Sprint 1) ───────────────────────────
+
 
 class GraphNode(BaseModel):
     id: str
@@ -91,29 +176,37 @@ class GraphData(BaseModel):
     clusters: list[GraphCluster]
 
 
-class ResultEvent(AnalyzeResponse):
-    type: Literal["result"] = "result"
+# ─── Test Execution Models (Phase 4) ─────────────────────────────────────────
 
 
-# TODO: Dev C owns models.py — these are stubs until their branch merges.
-# Replace with their canonical definitions when devc/testing-models lands.
-
-class StageChangeEvent(BaseModel):
-    type: Literal["stage_change"] = "stage_change"
-    stage: str      # "gather" | "unit_tests" | "checkpoint_unit" | "choice" |
-                    # "integration_tests" | "e2e_checkpoint" | "e2e_planning" | "submit"
-    summary: str
-
-
-class CheckpointEvent(BaseModel):
-    type: Literal["checkpoint"] = "checkpoint"
+class RunTestsRequest(BaseModel):
     session_id: str
-    stage_completed: str
-    interrupt_type: str     # "checkpoint" | "choice" | "e2e_context" | "question"
-    payload: dict[str, Any]
 
 
-# Request models
+class TestResult(BaseModel):
+    __test__ = False
 
-class IndexRequest(BaseModel):
-    repo_url: str  # GitHub repo URL, e.g. https://github.com/owner/repo
+    test_name: str
+    status: Literal["pass", "fail", "error", "skip"]
+    duration_ms: int
+    output: str = ""  # stdout/stderr
+
+
+class TestRunEvent(BaseModel):
+    __test__ = False  # not a pytest class (name starts with Test)
+
+    type: Literal["test_result"] = "test_result"
+    stage: Literal["unit", "integration"]
+    result: TestResult
+
+
+class TestRunDoneEvent(BaseModel):
+    __test__ = False  # not a pytest class (name starts with Test)
+
+    type: Literal["test_run_done"] = "test_run_done"
+    total: int
+    passed: int
+    failed: int
+    errors: int
+    skipped: int
+    duration_ms: int

@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 import indexer
+from agent.sessions import clear_sessions
 from main import app
 
 
@@ -19,8 +20,10 @@ async def client():
 @pytest.fixture(autouse=True)
 def reset_registry():
     indexer._registry.clear()
+    clear_sessions()
     yield
     indexer._registry.clear()
+    clear_sessions()
 
 
 def parse_sse_body(text: str) -> list[dict]:

@@ -299,7 +299,9 @@ def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
         name="submit_analysis",
         description=(
             "Submit the completed QA impact analysis. "
-            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array of component objects). "
+            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array). "
+            "Each component must include: component, files_changed, impact_summary, risks, confidence, "
+            "unit_tests (array of UnitTestSpec — may be empty), integration_tests (array of IntegrationTestSpec — may be empty). "
             "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
             "If you get a rejection message, correct the payload and call again."
         ),
@@ -575,3 +577,5 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         return builder(tool_input) if builder else f"Calling tool: {tool_name}"
     except Exception:
         return f"Calling tool: {tool_name}"
+
+

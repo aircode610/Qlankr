@@ -6,7 +6,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from indexer import get_graph_data, index_repo
-from models import AnalyzeRequest, ErrorEvent, IndexRequest
+from agent.sessions import get_session
+from models import (
+    AnalyzeRequest,
+    ContinueRequest,
+    ErrorEvent,
+    IndexRequest,
+    RunTestsRequest,
+)
 
 app = FastAPI()
 
@@ -122,13 +129,13 @@ async def debug_mcp_call(req: _DebugCallRequest):
 
 
 @app.post("/analyze")
-async def analyze(request: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest):
     async def generate():
         from agent.agent import run_agent  # noqa: PLC0415
         async for event in run_agent(
-            request.pr_url,
-            context=request.context,
-            session_id=request.session_id,
+            req.pr_url,
+            context=req.context,
+            session_id=req.session_id,
         ):
             yield sse_event(event)
 
@@ -136,12 +143,30 @@ async def analyze(request: AnalyzeRequest):
 
 
 @app.post("/analyze/{session_id}/continue")
-async def analyze_continue(session_id: str, user_response: dict):
-    # TODO: Dev C — replace user_response with ContinueRequest model once
-    # devc/testing-models lands. For now accepts raw dict matching interrupt type.
+async def continue_analysis(session_id: str, req: ContinueRequest):
     async def generate():
         from agent.agent import continue_agent  # noqa: PLC0415
+        user_response = {"action": req.action}
+        if req.additional_context:
+            user_response["context"] = req.additional_context
+            user_response["feedback"] = req.additional_context
         async for event in continue_agent(session_id, user_response):
             yield sse_event(event)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/analyze/{session_id}/status")
+async def analyze_session_status(session_id: str):
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session.to_status_dict()
+
+
+@app.post("/run-tests")
+async def run_tests(_req: RunTestsRequest):
+    raise HTTPException(
+        status_code=501,
+        detail="Test execution runner is not enabled until Phase 4.",
+    )
