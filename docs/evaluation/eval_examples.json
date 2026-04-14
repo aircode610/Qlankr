@@ -1,0 +1,141 @@
+[
+  {
+    "_category": "small bugfix — 1 file",
+    "inputs": {
+      "pr_url": "https://github.com/OpenTTD/OpenTTD/pull/15268"
+    },
+    "outputs": {
+      "expected_components": [
+        "Script API — Cargo Income",
+        "Cargo Economy"
+      ],
+      "expected_risks": [
+        "integer overflow in days_in_transit * 2 / 5 with large input values",
+        "AI scripts relying on exact out-of-range return values will silently get different results",
+        "documented max (637) diverges from actual safe max (163838) — may hide deeper issues",
+        "clamping before arithmetic changes observable behaviour for scripts passing garbage values"
+      ],
+      "expected_tools": [
+        "get_pull_request",
+        "get_pull_request_files",
+        "impact",
+        "context",
+        "cypher"
+      ],
+      "min_components": 1
+    }
+  },
+  {
+    "_category": "small bugfix — 1 file",
+    "inputs": {
+      "pr_url": "https://github.com/OpenTTD/OpenTTD/pull/15270"
+    },
+    "outputs": {
+      "expected_components": [
+        "Station Construction",
+        "Road Infrastructure"
+      ],
+      "expected_risks": [
+        "crash regression if OWNER_NONE guard is ever removed or refactored away",
+        "behaviour change: players can now over-build drive-through stops on own one-way roads — previously silently succeeded, now shows error message",
+        "other callers of CheckFlatLandRoadStop may have unexamined assumptions about road ownership",
+        "backport risk — fix was marked for stable branch; any regression affects released versions"
+      ],
+      "expected_tools": [
+        "get_pull_request",
+        "get_pull_request_files",
+        "impact",
+        "context",
+        "cypher"
+      ],
+      "min_components": 1
+    }
+  },
+  {
+    "_category": "large feature — 13 files",
+    "inputs": {
+      "pr_url": "https://github.com/OpenTTD/OpenTTD/pull/14461"
+    },
+    "outputs": {
+      "expected_components": [
+        "Town Cargo Tracking",
+        "Town Graph UI",
+        "Save/Load System",
+        "Script API — Town",
+        "NewGRF Town"
+      ],
+      "expected_risks": [
+        "save file format change — towns with many cargo types may fail to load from older saves",
+        "memory layout change in town struct may break existing assumptions in linked subsystems",
+        "cargo history array replaced with smaller structure — data loss if migration is incomplete",
+        "graph UI does not handle towns with no cargo history — potential divide-by-zero or empty render",
+        "Script API consumers iterating cargo data may receive stale or zero values during transition tick"
+      ],
+      "expected_tools": [
+        "get_pull_request",
+        "get_pull_request_files",
+        "impact",
+        "context",
+        "query",
+        "cypher"
+      ],
+      "min_components": 3
+    }
+  },
+  {
+    "_category": "refactor — 30 files, moved ownership across subsystems",
+    "inputs": {
+      "pr_url": "https://github.com/OpenTTD/OpenTTD/pull/13948"
+    },
+    "outputs": {
+      "expected_components": [
+        "Order Management",
+        "Vehicle System",
+        "Save/Load System",
+        "Order GUI",
+        "Link Graph",
+        "Script API — Orders"
+      ],
+      "expected_risks": [
+        "savegame compatibility — new SLV version required; loading legacy TTO/TTD saves caused assertion failures in initial version",
+        "order iteration correctness — pointer-based traversal replaced with vector indexing; off-by-one errors across 22 call sites",
+        "order backup and restore broken if index mapping between old and new format is mishandled",
+        "link graph refresh depends on order traversal order — behaviour change if vector ordering differs from pool ordering",
+        "Script API order access may return wrong orders if index translation contains bugs"
+      ],
+      "expected_tools": [
+        "get_pull_request",
+        "get_pull_request_files",
+        "impact",
+        "context",
+        "query",
+        "cypher"
+      ],
+      "min_components": 3
+    }
+  },
+  {
+    "_category": "new files only — new Script API class, nothing in graph yet",
+    "inputs": {
+      "pr_url": "https://github.com/OpenTTD/OpenTTD/pull/12015"
+    },
+    "outputs": {
+      "expected_components": [
+        "Script API — TileList",
+        "Station Coverage"
+      ],
+      "expected_risks": [
+        "new class not yet in knowledge graph — impact and context tools will return no data; agent must rely on file contents alone",
+        "ScriptTileList_StationCoverage exposes catchment_tiles directly — stale tile data if station updates are not flushed before script access",
+        "no savegame implications but regression tests only cover happy path — edge cases (station with no coverage, deleted station) untested",
+        "AI scripts iterating the tile list while station catchment changes mid-tick may observe inconsistent state"
+      ],
+      "expected_tools": [
+        "get_pull_request",
+        "get_pull_request_files",
+        "get_file_contents"
+      ],
+      "min_components": 1
+    }
+  }
+]
