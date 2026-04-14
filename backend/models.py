@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,8 +12,8 @@ class IndexRequest(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     pr_url: str
-    context: str | None = None  # optional bug report or user scenario for E2E stage
-    session_id: str | None = None  # set when resuming after a checkpoint
+    context: str | None = None      # optional bug report or user scenario for E2E stage
+    session_id: str | None = None   # set when resuming after a checkpoint
 
 
 class ContinueRequest(BaseModel):
@@ -83,14 +83,11 @@ class E2ETestPlan(BaseModel):
 class AffectedComponent(BaseModel):
     component: str
     files_changed: list[str] = Field(default_factory=list)
-    impact_summary: str
+    impact_summary: str = ""
     risks: list[str] = Field(default_factory=list)
-    confidence: Literal["high", "medium", "low"]
+    confidence: Literal["high", "medium", "low"] = "low"
     unit_tests: list[UnitTestSpec] = Field(default_factory=list)
     integration_tests: list[IntegrationTestSpec] = Field(default_factory=list)
-
-
-# ─── Analyze Response (updated) ──────────────────────────────────────────────
 
 
 class AnalyzeResponse(BaseModel):
@@ -113,27 +110,16 @@ class AgentStepEvent(BaseModel):
 
 class StageChangeEvent(BaseModel):
     type: Literal["stage_change"] = "stage_change"
-    stage: Literal[
-        "gathering",
-        "unit_testing",
-        "integration_testing",
-        "e2e_planning",
-        "submitting",
-    ]
+    stage: str  # graph node name: gather, unit_tests, checkpoint_unit, choice, etc.
     summary: str
 
 
 class CheckpointEvent(BaseModel):
     type: Literal["checkpoint"] = "checkpoint"
     session_id: str
-    stage_completed: Literal[
-        "gathering",
-        "unit_testing",
-        "integration_testing",
-        "e2e_planning",
-    ]
-    intermediate_result: dict  # partial AnalyzeResponse serialized
-    prompt: str  # question for the user
+    stage_completed: str
+    interrupt_type: str = "checkpoint"  # "checkpoint" | "choice" | "e2e_context" | "question"
+    payload: dict = Field(default_factory=dict)  # interrupt data (intermediate_result, prompt, options, etc.)
 
 
 class ErrorEvent(BaseModel):

@@ -122,7 +122,7 @@ async def debug_mcp_call(req: _DebugCallRequest):
     if req.tool not in tool_map:
         raise HTTPException(
             status_code=404,
-            detail=f"tool {req.tool!r} not found — available: {sorted(tool_map)}",
+            detail=f"tool {req.tool!r} not found ? available: {sorted(tool_map)}",
         )
     raw = await tool_map[req.tool].ainvoke(req.args)
     return {"tool": req.tool, "args": req.args, "result": _unwrap(raw)}
@@ -131,34 +131,27 @@ async def debug_mcp_call(req: _DebugCallRequest):
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
     async def generate():
-        try:
-            from agent.agent import run_agent  # noqa: PLC0415
-
-            async for event in run_agent(
-                pr_url=req.pr_url,
-                context=req.context,
-                session_id=req.session_id,
-            ):
-                yield sse_event(event)
-        except ImportError:
-            yield sse_event(ErrorEvent(message="Agent not yet implemented"))
+        from agent.agent import run_agent  # noqa: PLC0415
+        async for event in run_agent(
+            req.pr_url,
+            context=req.context,
+            session_id=req.session_id,
+        ):
+            yield sse_event(event)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/analyze/{session_id}/continue")
 async def continue_analysis(session_id: str, req: ContinueRequest):
-    if get_session(session_id) is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
     async def generate():
-        try:
-            from agent.agent import resume_agent  # noqa: PLC0415
-
-            async for event in resume_agent(session_id, req):
-                yield sse_event(event)
-        except ImportError:
-            yield sse_event(ErrorEvent(message="Resume agent not yet implemented"))
+        from agent.agent import continue_agent  # noqa: PLC0415
+        user_response = {"action": req.action}
+        if req.additional_context:
+            user_response["context"] = req.additional_context
+            user_response["feedback"] = req.additional_context
+        async for event in continue_agent(session_id, user_response):
+            yield sse_event(event)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

@@ -1,4 +1,4 @@
-"""Tests for backend/agent/tools.py — filter_tools() and stage tool subsets."""
+"""Tests for backend/agent/tools.py ? filter_tools() and stage tool subsets."""
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -118,7 +118,8 @@ def test_e2e_includes_process_tools():
 # ── get_mcp_client() server config ───────────────────────────────────────────
 
 def test_get_mcp_client_configures_both_servers():
-    with patch("agent.tools.MultiServerMCPClient") as mock_cls:
+    with patch("agent.tools.MultiServerMCPClient") as mock_cls, \
+         patch("agent.tools.shutil.which", return_value="/usr/local/bin/gitnexus"):
         mock_cls.return_value = MagicMock()
         get_mcp_client()
         config = mock_cls.call_args[0][0]
@@ -137,13 +138,24 @@ def test_get_mcp_client_github_server_config():
 
 
 def test_get_mcp_client_gitnexus_server_config():
-    with patch("agent.tools.MultiServerMCPClient") as mock_cls:
+    with patch("agent.tools.MultiServerMCPClient") as mock_cls, \
+         patch("agent.tools.shutil.which", return_value="/usr/local/bin/gitnexus"):
         mock_cls.return_value = MagicMock()
         get_mcp_client()
         config = mock_cls.call_args[0][0]["gitnexus"]
         assert config["transport"] == "stdio"
         assert config["command"] == "gitnexus"
         assert "mcp" in config["args"]
+
+
+def test_get_mcp_client_skips_gitnexus_when_not_installed():
+    with patch("agent.tools.MultiServerMCPClient") as mock_cls, \
+         patch("agent.tools.shutil.which", return_value=None):
+        mock_cls.return_value = MagicMock()
+        get_mcp_client()
+        config = mock_cls.call_args[0][0]
+        assert "github" in config
+        assert "gitnexus" not in config
 
 
 # ── make_process_tools() ──────────────────────────────────────────────────────
