@@ -25,9 +25,9 @@ const UnitTestCard = ({ spec }: { spec: UnitTestSpec }) => {
       </button>
       {open && (
         <div className="border-t border-border-subtle px-3 pb-3 pt-2">
-          {spec.mocks.length > 0 && (
+          {spec.mocks_needed.length > 0 && (
             <div className="mb-2 flex flex-wrap gap-1">
-              {spec.mocks.map((m, i) => <span key={i} className="rounded bg-border-subtle px-1.5 py-0.5 font-mono text-[10px] text-text-muted">mock: {m}</span>)}
+              {spec.mocks_needed.map((m, i) => <span key={i} className="rounded bg-border-subtle px-1.5 py-0.5 font-mono text-[10px] text-text-muted">mock: {m}</span>)}
             </div>
           )}
           <div className="flex flex-col gap-1.5">
@@ -54,7 +54,7 @@ const UnitTestCard = ({ spec }: { spec: UnitTestSpec }) => {
 /* ── Integration Test Card ── */
 const IntegrationTestCard = ({ spec }: { spec: IntegrationTestSpec }) => {
   const [open, setOpen] = useState(false);
-  const riskStyle = CONFIDENCE_STYLES[spec.risk.toLowerCase()] || CONFIDENCE_STYLES.medium;
+  const riskStyle = CONFIDENCE_STYLES[spec.risk_level.toLowerCase()] || CONFIDENCE_STYLES.medium;
 
   return (
     <div className="rounded border border-border-subtle bg-deep">
@@ -62,12 +62,12 @@ const IntegrationTestCard = ({ spec }: { spec: IntegrationTestSpec }) => {
         {open ? <ChevronDown className="h-3.5 w-3.5 text-text-muted" /> : <ChevronRight className="h-3.5 w-3.5 text-text-muted" />}
         <Layers className="h-3.5 w-3.5 text-node-interface" />
         <span className="flex-1 font-mono text-xs text-text-primary">{spec.integration_point}</span>
-        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${riskStyle}`}>{spec.risk}</span>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${riskStyle}`}>{spec.risk_level}</span>
       </button>
       {open && (
         <div className="border-t border-border-subtle px-3 pb-3 pt-2">
           <div className="mb-2 flex flex-wrap gap-1">
-            {spec.modules.map((m, i) => <span key={i} className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">{m}</span>)}
+            {spec.modules_involved.map((m, i) => <span key={i} className="rounded bg-accent/10 px-1.5 py-0.5 font-mono text-[10px] text-accent">{m}</span>)}
           </div>
           {spec.data_setup && <p className="mb-2 text-[11px] text-text-muted">{spec.data_setup}</p>}
           <div className="flex flex-col gap-1.5">
@@ -105,8 +105,8 @@ const E2EPlanCard = ({ plan }: { plan: E2ETestPlan }) => {
           {plan.preconditions && <p className="mb-2 text-[11px] text-text-muted">Pre: {plan.preconditions}</p>}
           <ol className="flex flex-col gap-1.5">
             {plan.steps.map((step) => (
-              <li key={step.step_number} className="flex gap-2 rounded bg-elevated/50 px-2.5 py-2">
-                <span className="shrink-0 font-mono text-[10px] font-medium text-accent">{step.step_number}.</span>
+              <li key={step.step} className="flex gap-2 rounded bg-elevated/50 px-2.5 py-2">
+                <span className="shrink-0 font-mono text-[10px] font-medium text-accent">{step.step}.</span>
                 <div>
                   <p className="text-[11px] text-text-primary">{step.action}</p>
                   <p className="mt-0.5 text-[11px] text-emerald-400">→ {step.expected}</p>
@@ -175,41 +175,6 @@ const ComponentResultCard = ({ component }: { component: AffectedComponent }) =>
             </>
           )}
 
-          {/* Sprint 1 fallback: test_suggestions */}
-          {!component.unit_tests && component.test_suggestions && (
-            <div className="mt-2 flex flex-col gap-2 text-[11px]">
-              {component.test_suggestions.run.length > 0 && (
-                <div>
-                  <p className="mb-1 font-medium text-emerald-400">Run</p>
-                  <ul className="flex flex-col gap-0.5">
-                    {component.test_suggestions.run.map((s, i) => (
-                      <li key={i} className="rounded bg-emerald-500/10 px-2 py-1 text-text-secondary">{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {component.test_suggestions.deeper.length > 0 && (
-                <div>
-                  <p className="mb-1 font-medium text-yellow-400">Investigate deeper</p>
-                  <ul className="flex flex-col gap-0.5">
-                    {component.test_suggestions.deeper.map((s, i) => (
-                      <li key={i} className="rounded bg-yellow-500/10 px-2 py-1 text-text-secondary">{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {component.test_suggestions.skip.length > 0 && (
-                <div>
-                  <p className="mb-1 font-medium text-text-muted">Skip</p>
-                  <ul className="flex flex-col gap-0.5">
-                    {component.test_suggestions.skip.map((s, i) => (
-                      <li key={i} className="rounded bg-border-subtle px-2 py-1 text-text-muted line-through">{s}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
     </div>

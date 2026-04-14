@@ -21,12 +21,15 @@ const WORKFLOW_META: Record<WorkflowId, { label: string; Icon: React.ElementType
   e2e_planning:      { label: 'E2E Planning',        Icon: Map,     color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/30' },
 };
 
-const STAGE_LABELS: Record<AnalysisStage, string> = {
-  gathering: 'Gathering context',
-  unit_testing: 'Writing unit tests',
-  integration_testing: 'Integration analysis',
+const STAGE_LABELS: Record<string, string> = {
+  gather: 'Gathering context',
+  unit_tests: 'Writing unit tests',
+  checkpoint_unit: 'Reviewing unit tests',
+  choice: 'Choosing next stage',
+  integration_tests: 'Integration analysis',
+  e2e_checkpoint: 'E2E context gathering',
   e2e_planning: 'E2E planning',
-  submitting: 'Submitting',
+  submit: 'Submitting',
 };
 
 export const AgentTraceDrawer = ({ steps, analyzing, activeWorkflow, currentStage }: AgentTraceDrawerProps) => {

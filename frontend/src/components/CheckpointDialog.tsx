@@ -28,11 +28,22 @@ export const CheckpointDialog = ({ checkpoint, onContinue, onDismiss }: Checkpoi
 
         {/* Body */}
         <div className="px-5 py-4">
-          <p className="mb-4 text-sm leading-relaxed text-text-secondary">{checkpoint.prompt}</p>
+          <p className="mb-4 text-sm leading-relaxed text-text-secondary">
+            {checkpoint.payload?.prompt || `Review results from ${checkpoint.stage_completed} stage.`}
+          </p>
 
           <div className="mb-4 rounded border border-border-subtle bg-deep p-3 text-xs text-text-muted">
-            Stage completed: <span className="text-accent">{checkpoint.stage_completed.replace('_', ' ')}</span>
+            Stage: <span className="text-accent">{checkpoint.stage_completed.replace(/_/g, ' ')}</span>
+            {checkpoint.interrupt_type !== 'checkpoint' && (
+              <span className="ml-2 text-text-muted">({checkpoint.interrupt_type})</span>
+            )}
           </div>
+
+          {checkpoint.payload?.options && (
+            <div className="mb-4 text-xs text-text-muted">
+              Options: {(checkpoint.payload.options as string[]).join(', ')}
+            </div>
+          )}
 
           {showContextInput && (
             <div className="mb-4">

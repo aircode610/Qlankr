@@ -1,20 +1,29 @@
 /** Workflow the user chose to run */
 export type WorkflowId = 'unit_tests' | 'integration_tests' | 'e2e_planning';
 
-/** Analysis pipeline stages */
+/** Analysis pipeline stages — matches StateGraph node names from backend */
 export type AnalysisStage =
-  | 'gathering'
-  | 'unit_testing'
-  | 'integration_testing'
+  | 'gather'
+  | 'unit_tests'
+  | 'checkpoint_unit'
+  | 'choice'
+  | 'integration_tests'
+  | 'e2e_checkpoint'
   | 'e2e_planning'
-  | 'submitting';
+  | 'submit';
 
-/** Checkpoint data from SSE */
+/** Checkpoint data from SSE — matches backend CheckpointEvent */
 export interface CheckpointData {
   session_id: string;
-  stage_completed: AnalysisStage;
-  intermediate_result: unknown;
-  prompt: string;
+  stage_completed: string;
+  interrupt_type: string;  // "checkpoint" | "choice" | "e2e_context" | "question"
+  payload: {
+    type?: string;
+    prompt?: string;
+    options?: string[];
+    intermediate_result?: unknown;
+    [key: string]: unknown;
+  };
 }
 
 /** Test case structures */
@@ -26,8 +35,8 @@ export interface UnitTestCase {
 
 export interface UnitTestSpec {
   target: string;
-  priority: 'HIGH' | 'MEDIUM' | 'LOW' | 'CRITICAL';
-  mocks: string[];
+  priority: 'high' | 'medium' | 'low';
+  mocks_needed: string[];
   test_cases: UnitTestCase[];
   generated_code?: string;
 }
@@ -40,14 +49,15 @@ export interface IntegrationTestCase {
 
 export interface IntegrationTestSpec {
   integration_point: string;
-  modules: string[];
-  risk: 'HIGH' | 'MEDIUM' | 'LOW' | 'CRITICAL';
+  modules_involved: string[];
+  risk_level: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   data_setup: string;
   test_cases: IntegrationTestCase[];
+  generated_code?: string;
 }
 
 export interface E2ETestStep {
-  step_number: number;
+  step: number;
   action: string;
   expected: string;
 }
@@ -55,18 +65,11 @@ export interface E2ETestStep {
 export interface E2ETestPlan {
   process: string;
   scenario: string;
-  priority: 'HIGH' | 'MEDIUM' | 'LOW' | 'CRITICAL';
+  priority: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   estimated_duration: string;
   preconditions: string;
   steps: E2ETestStep[];
-  affected_paths: string[];
-}
-
-/** Sprint 1 backend format — test_suggestions instead of structured specs */
-export interface TestSuggestions {
-  skip: string[];
-  run: string[];
-  deeper: string[];
+  affected_by_pr: string[];
 }
 
 export interface AffectedComponent {
@@ -74,10 +77,7 @@ export interface AffectedComponent {
   files_changed: string[];
   impact_summary: string;
   risks: string[];
-  confidence: 'high' | 'medium' | 'low' | 'critical';
-  /** Sprint 1 backend format */
-  test_suggestions?: TestSuggestions;
-  /** Sprint 2 backend format (future) */
+  confidence: 'high' | 'medium' | 'low';
   unit_tests?: UnitTestSpec[];
   integration_tests?: IntegrationTestSpec[];
 }
