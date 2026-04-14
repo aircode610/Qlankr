@@ -1,0 +1,83 @@
+examples = [
+    {
+        "inputs": {
+            "pr_url": "https://github.com/ppy/osu/pull/32854",
+        },
+        "outputs": {
+            # Expected affected components (by name)
+            "expected_components": [
+                "SongSelectV2 (screen host, layout orchestration)",
+                "BeatmapCarouselV2 (SelectV2 scroll + virtualised panel list)",
+                "PanelBeatmapSet / PanelBeatmap (new sheared carousel panels)",
+                "BeatmapTitleWedge / BeatmapMetadataWedge (left-side info wedges)",
+                "BeatmapLeaderboardWedge (right-side leaderboard panel)",
+                "SongSelectFilterControl (search + filter bar)",
+                "ScreenFooter / ShearedOverlayContainer (footer and mod select integration)",
+            ],
+
+            # Key risks a good analysis should catch
+            "expected_risks": [
+                # Explicitly listed as "remaining work" in issue #32736 at time of merge:
+                # leaderboards don't load (commit 81d54a9). The wedge is wired in
+                # but the leaderboard request path is not connected to the new screen's
+                # selected-beatmap bindable, so users see a permanently empty leaderboard.
+                "leaderboard not connected: BeatmapLeaderboardWedge is placed in the layout "
+                "but not wired to the screen's selected beatmap bindable — scores silently "
+                "never load (acknowledged in issue #32736 as known missing work)",
+
+                # Skinning support explicitly listed as missing in #32736 (#33099).
+                # New panels (PanelBeatmapSet, PanelBeatmap) use hardcoded Argon colours
+                # with no ISkinSource / LegacySkin lookup, so custom and legacy skins
+                # produce no visual difference from default.
+                "no skin layer on new panels: PanelBeatmapSet and PanelBeatmap do not "
+                "implement ISkinSource callbacks — custom skins (classic, legacy, user-made) "
+                "are silently ignored and the Argon defaults are always rendered",
+
+                # Global beatmap bindable hookup listed as missing in #32736.
+                # SongSelectV2 manages its own local selection state and does not yet
+                # propagate it back to OsuGame.Beatmap, so other screens (editor, player)
+                # may see a stale working beatmap when entered from SongSelectV2.
+                "working beatmap bindable not propagated: SongSelectV2 tracks selection "
+                "internally without writing back to OsuGame.Beatmap — starting gameplay "
+                "or the editor from the new screen may load the wrong beatmap",
+
+                # Music/audio handling listed as incomplete in #32736.
+                # Old SongSelect drives music track changes through BeatmapCarousel's
+                # SelectionChanged callback; SongSelectV2 does not replicate this path,
+                # so track does not change when scrolling the new carousel.
+                "music not driven from new screen: audio track changes on carousel scroll "
+                "are not implemented in SongSelectV2 — track stays fixed on whatever was "
+                "playing when the screen was entered",
+
+                # Sound effects (hover, select clicks) listed as completely missing in #32736.
+                # None of the new panel types play samples on hover, click, or selection
+                # change, creating a silent UX compared to the old carousel.
+                "sound effects absent: new carousel panels emit no audio feedback on hover, "
+                "click, or beatmap selection — regression from all existing SongSelect "
+                "audio behaviour",
+
+                # The filter control (#33039) and hidden-difficulty handling (#33202) are
+                # explicitly listed as remaining work at merge time, meaning the carousel
+                # displays hidden beatmaps and does not respond to search text input.
+                "filter control not wired: SongSelectFilterControl is rendered but its "
+                "criteria are not passed to BeatmapCarouselV2 — search and filter inputs "
+                "produce no visible change in the carousel item list",
+            ],
+
+            # Tools the agent SHOULD call for a thorough analysis
+            "expected_tools": [
+                "get_pull_request",        # fetch PR metadata, description, labels
+                "get_pull_request_files",  # enumerate all changed files under SelectV2/
+                "get_pull_request_diff",   # read diff hunks for SongSelectV2 screen body
+                "get_issue",               # fetch issue #32736 for the known-remaining-work list
+                "context",                 # look up how old SongSelect writes to OsuGame.Beatmap
+                "impact",                  # find all screens that read OsuGame.Beatmap bindable
+                "search_code",            # find all ISkinSource usages in old carousel panels
+                                           # to compare with new panel implementations
+            ],
+
+            # Minimum number of components we expect
+            "min_components": 4,
+        },
+    },
+]

@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Evaluating an AI Agent — Qlankr</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0d0d0d;
+      --surface:  #141414;
+      --border:   #242424;
+      --accent:   #6ee7b7;
+      --accent2:  #67e8f9;
+      --muted:    #6b7280;
+      --text:     #f3f4f6;
+      --dim:      #9ca3af;
+      --red:      #f87171;
+      --yellow:   #fbbf24;
+      --green:    #4ade80;
+    }
+
+    html, body { width:100%; height:100%; background:var(--bg); color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+      overflow:hidden; }
+
+    /* ── Slides ── */
+    #deck { width:100vw; height:100vh; position:relative; }
+    .slide { position:absolute; inset:0; display:flex; flex-direction:column;
+      justify-content:center; align-items:center; padding:56px 80px;
+      opacity:0; pointer-events:none; transition:opacity 0.35s ease; text-align:center; }
+    .slide.active { opacity:1; pointer-events:all; }
+    .slide.left { align-items:flex-start; text-align:left; }
+
+    /* ── Type ── */
+    .eyebrow { font-size:11px; font-weight:700; letter-spacing:.18em; text-transform:uppercase;
+      color:var(--accent); margin-bottom:18px; }
+    h1 { font-size:clamp(34px,5vw,62px); font-weight:700; line-height:1.1; letter-spacing:-.02em; }
+    h1 span, h2 span { color:var(--accent); }
+    h2 { font-size:clamp(24px,3.2vw,42px); font-weight:700; letter-spacing:-.02em; line-height:1.15; }
+    .subtitle { font-size:clamp(14px,1.8vw,19px); color:var(--dim); margin-top:18px;
+      max-width:660px; line-height:1.65; }
+    .divider { width:44px; height:2px; background:var(--accent); margin:24px 0; flex-shrink:0; }
+
+    /* ── Grids ── */
+    .g2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; width:100%; max-width:860px; }
+    .g3 { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; width:100%; max-width:940px; }
+
+    /* ── Cards ── */
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:12px;
+      padding:24px 22px; text-align:left; }
+    .card.hl { border-color:rgba(110,231,183,.35); background:rgba(110,231,183,.04); }
+    .card .ci { font-size:20px; margin-bottom:12px; }
+    .card .ct { font-size:13px; font-weight:700; color:var(--text); margin-bottom:7px; }
+    .card .cb { font-size:12.5px; color:var(--dim); line-height:1.6; }
+
+    /* ── Eval row (deep dive slides) ── */
+    .eval-row { display:flex; align-items:flex-start; gap:18px; width:100%; max-width:860px;
+      padding:16px 20px; background:var(--surface); border:1px solid var(--border);
+      border-radius:10px; margin-bottom:11px; }
+    .er-badge { font-size:10px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+      padding:4px 9px; border-radius:4px; flex-shrink:0; min-width:72px; text-align:center; margin-top:2px; }
+    .det  { background:rgba(103,232,249,.1); color:var(--accent2); border:1px solid rgba(103,232,249,.2); }
+    .llm  { background:rgba(251,191,36,.1);  color:var(--yellow);  border:1px solid rgba(251,191,36,.2); }
+    .er-body { flex:1; min-width:0; }
+    .er-title { font-size:13.5px; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .er-question { font-size:12px; color:var(--accent); margin-bottom:5px; font-style:italic; }
+    .er-how { font-size:12px; color:var(--dim); line-height:1.55; }
+    .er-score { font-size:12px; color:var(--dim); margin-top:5px; }
+    .er-score .s1 { color:var(--green); font-weight:700; }
+    .er-score .s0 { color:var(--red); font-weight:700; }
+
+    /* ── Comparison table ── */
+    .ctable { width:100%; max-width:820px; border-collapse:collapse; font-size:13.5px; }
+    .ctable th { padding:10px 18px; text-align:left; font-size:10px; font-weight:700;
+      letter-spacing:.1em; text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--border); }
+    .ctable th.hl { color:var(--accent); }
+    .ctable td { padding:13px 18px; border-bottom:1px solid var(--border); color:var(--dim); }
+    .ctable tr td:first-child { color:var(--text); font-weight:600; }
+    .ctable tr.sel td { background:rgba(110,231,183,.05); }
+    .ctable tr.sel td:first-child { color:var(--accent); }
+    .ck { color:var(--green); font-weight:700; }
+    .cx { color:var(--red); }
+    .cp { color:var(--yellow); }
+
+    /* ── Score bars ── */
+    .score-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 40px;
+      width:100%; max-width:900px; }
+    .score-row { display:flex; align-items:center; gap:12px; }
+    .score-label { font-size:12px; color:var(--dim); min-width:190px; flex-shrink:0; text-align:right; }
+    .score-track { flex:1; height:6px; background:var(--border); border-radius:3px; overflow:hidden; }
+    .score-fill { height:100%; border-radius:3px; transition:width .6s ease; }
+    .score-num { font-size:12px; font-weight:700; min-width:36px; text-align:left; flex-shrink:0; }
+    .fill-green  { background:var(--green); }
+    .fill-yellow { background:var(--yellow); }
+    .fill-red    { background:var(--red); }
+    .fill-muted  { background:var(--muted); }
+    .score-section-label { font-size:10px; font-weight:700; letter-spacing:.12em;
+      text-transform:uppercase; color:var(--muted); grid-column:1/-1; margin-top:6px; }
+
+    /* ── Insight box ── */
+    .insight { display:flex; gap:14px; align-items:flex-start; padding:16px 20px;
+      background:var(--surface); border:1px solid var(--border); border-radius:10px;
+      text-align:left; width:100%; max-width:820px; margin-bottom:10px; }
+    .insight-icon { font-size:20px; flex-shrink:0; }
+    .insight-body .it { font-size:13px; font-weight:700; color:var(--text); margin-bottom:4px; }
+    .insight-body .id { font-size:12.5px; color:var(--dim); line-height:1.55; }
+    .insight.good { border-color:rgba(74,222,128,.25); background:rgba(74,222,128,.04); }
+    .insight.warn { border-color:rgba(251,191,36,.25); background:rgba(251,191,36,.04); }
+    .insight.bad  { border-color:rgba(248,113,113,.25); background:rgba(248,113,113,.04); }
+
+    /* ── Flow ── */
+    .flow-col { display:flex; flex-direction:column; gap:10px; width:100%; max-width:620px; }
+    .flow-step { display:flex; align-items:flex-start; gap:16px; padding:14px 20px;
+      background:var(--surface); border:1px solid var(--border); border-radius:10px; text-align:left; }
+    .flow-step.hl { border-color:rgba(110,231,183,.4); background:rgba(110,231,183,.05); }
+    .step-num { font-size:18px; font-weight:800; color:var(--accent); flex-shrink:0; min-width:24px; }
+    .step-title { font-size:13px; font-weight:700; color:var(--text); margin-bottom:3px; }
+    .step-desc  { font-size:12px; color:var(--dim); line-height:1.5; }
+
+    /* ── Image placeholder ── */
+    .img-slot { border:1.5px dashed var(--border); border-radius:12px;
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:10px; color:var(--muted); font-size:13px; padding:24px; min-height:180px; }
+    .img-slot .is-icon { font-size:28px; }
+    .img-slot .is-label { font-size:12px; color:var(--muted); }
+
+    /* ── Nav ── */
+    #nav { position:fixed; bottom:28px; left:50%; transform:translateX(-50%);
+      display:flex; align-items:center; gap:14px; z-index:100; }
+    .nb { background:var(--surface); border:1px solid var(--border); color:var(--dim);
+      border-radius:7px; padding:7px 16px; font-size:12px; font-weight:600; cursor:pointer; transition:all .2s; }
+    .nb:hover { background:var(--border); color:var(--text); }
+    .nb:disabled { opacity:.25; cursor:default; }
+    #sc { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:44px; text-align:center; }
+    #prog { position:fixed; top:0; left:0; height:2px; background:var(--accent); transition:width .3s ease; z-index:200; }
+
+    code { font-family:"SF Mono","Fira Code",Menlo,monospace; font-size:.85em;
+      background:rgba(255,255,255,.07); border-radius:4px; padding:2px 6px; color:var(--accent2); }
+  </style>
+</head>
+<body>
+<div id="prog"></div>
+<div id="deck">
+
+<!-- ══ 1  TITLE ═══════════════════════════════════════════════════ -->
+<div class="slide active">
+  <div class="eyebrow">Qlankr · Evaluation Framework</div>
+  <h1>How do you know your<br><span>AI agent is good?</span></h1>
+  <p class="subtitle">Measuring the quality of an AI-powered code review agent —
+  from intuition to reproducible metrics.</p>
+</div>
+
+<!-- ══ 2  CONTEXT ═════════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">Context</div>
+  <h2>What does the <span>agent</span> do?</h2>
+  <div class="divider"></div>
+  <div class="g3" style="max-width:820px;">
+    <div class="card hl">
+      <div class="ci">📥</div>
+      <div class="ct">Input</div>
+      <div class="cb">A GitHub Pull Request URL — any repo, any size.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">🤖</div>
+      <div class="ct">8-stage AI pipeline</div>
+      <div class="cb">Reads code, calls knowledge graph tools, generates unit + integration or E2E test plans.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">📋</div>
+      <div class="ct">Output</div>
+      <div class="cb">Affected components, risk list, and ready-to-implement test specs.</div>
+    </div>
+  </div>
+  <p class="subtitle" style="margin-top:24px; font-size:13px;">
+    The agent uses <strong style="color:var(--text)">human-in-the-loop checkpoints</strong> —
+    users review unit tests before choosing integration or E2E planning.
+  </p>
+</div>
+
+<!-- ══ 3  PROBLEM ════════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">The Problem</div>
+  <h2>Why "looks good" <span>isn't enough</span></h2>
+  <div class="divider"></div>
+  <ul style="list-style:none; max-width:660px; width:100%;">
+    <li style="display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--border);font-size:15px;color:var(--dim);text-align:left;">
+      <span style="font-size:17px;flex-shrink:0">🎲</span>
+      <span><strong style="color:var(--text)">Non-deterministic</strong> — the same PR produces different outputs each run</span>
+    </li>
+    <li style="display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--border);font-size:15px;color:var(--dim);text-align:left;">
+      <span style="font-size:17px;flex-shrink:0">📏</span>
+      <span><strong style="color:var(--text)">No ground truth</strong> — there's no single "correct" test plan to compare against</span>
+    </li>
+    <li style="display:flex;gap:14px;padding:13px 0;border-bottom:1px solid var(--border);font-size:15px;color:var(--dim);text-align:left;">
+      <span style="font-size:17px;flex-shrink:0">🔗</span>
+      <span><strong style="color:var(--text)">Multi-step</strong> — a failure in stage 2 of 8 silently poisons all downstream output</span>
+    </li>
+    <li style="display:flex;gap:14px;padding:13px 0;font-size:15px;color:var(--dim);text-align:left;">
+      <span style="font-size:17px;flex-shrink:0">🔄</span>
+      <span><strong style="color:var(--text)">Regressions are silent</strong> — a small prompt change can quietly drop quality weeks later</span>
+    </li>
+  </ul>
+</div>
+
+<!-- ══ 4  LANDSCAPE ═══════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">The Landscape</div>
+  <h2>Tools we <span>considered</span></h2>
+  <div class="divider"></div>
+  <table class="ctable">
+    <thead>
+      <tr>
+        <th>Tool</th><th>Tracing</th><th>Built-in Evals</th>
+        <th class="hl">LangGraph Native</th><th>Dataset Mgmt</th><th>Self-host</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="sel">
+        <td>LangSmith ✦</td><td class="ck">✓</td><td class="ck">✓</td>
+        <td class="ck">✓ native</td><td class="ck">✓</td><td class="cx">✗</td>
+      </tr>
+      <tr>
+        <td>Langfuse</td><td class="ck">✓</td><td class="cp">limited</td>
+        <td class="cp">manual</td><td class="cp">basic</td><td class="ck">✓</td>
+      </tr>
+      <tr>
+        <td>Weights &amp; Biases</td><td class="ck">✓</td><td class="cp">limited</td>
+        <td class="cx">✗</td><td class="ck">✓</td><td class="cx">✗</td>
+      </tr>
+      <tr>
+        <td>Arize AI</td><td class="ck">✓</td><td class="ck">✓</td>
+        <td class="cx">✗</td><td class="cp">basic</td><td class="cx">✗</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ══ 5  WHY LANGSMITH ═══════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">Our Choice</div>
+  <h2>Why <span>LangSmith</span></h2>
+  <div class="divider"></div>
+  <div class="g3">
+    <div class="card hl">
+      <div class="ci">🔗</div>
+      <div class="ct">Zero-config tracing</div>
+      <div class="cb">One environment variable. Every LangGraph run — every tool call, every LLM message — is automatically recorded.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">🗂️</div>
+      <div class="ct">Datasets + Evaluators</div>
+      <div class="cb">Golden examples live in LangSmith. Evaluators are plain Python functions — no framework to learn.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">📊</div>
+      <div class="ct">Experiment comparison</div>
+      <div class="cb">Change a prompt → re-run → see scores side-by-side across every metric, for every example.</div>
+    </div>
+  </div>
+  <img src="LangSmith%20experiment%20comparison%20view%20.png"
+       style="margin-top:20px; max-width:900px; width:100%; border-radius:10px; border:1px solid var(--border);"
+       alt="LangSmith experiment comparison view" />
+</div>
+
+<!-- ══ 6  DATASET ════════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">Golden Dataset</div>
+  <h2><span>8 real PRs</span> as ground truth</h2>
+  <div class="divider"></div>
+  <div class="g2" style="max-width:820px;">
+    <div class="card">
+      <div class="ci">🏠</div>
+      <div class="ct">Qlankr repo — 1 PR</div>
+      <div class="cb">Our own codebase, fully indexed in the knowledge graph.<br><br>
+        Tests the <strong style="color:var(--text)">full pipeline</strong>: GitHub tools + graph queries (impact, cypher, context).</div>
+    </div>
+    <div class="card">
+      <div class="ci">🌍</div>
+      <div class="ct">External repos — 7 PRs</div>
+      <div class="cb">OpenTTD, osu!, Cataclysm-DDA — the agent has never seen these repos.<br><br>
+        Tests <strong style="color:var(--text)">GitHub-only fallback</strong> across all PR sizes.</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:40px;margin-top:28px;">
+    <div style="text-align:center;"><div style="font-size:48px;font-weight:800;color:var(--accent);letter-spacing:-.03em;">2</div><div style="font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:6px;">small bugfixes</div></div>
+    <div style="text-align:center;"><div style="font-size:48px;font-weight:800;color:var(--accent);letter-spacing:-.03em;">3</div><div style="font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:6px;">large features</div></div>
+    <div style="text-align:center;"><div style="font-size:48px;font-weight:800;color:var(--accent);letter-spacing:-.03em;">2</div><div style="font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:6px;">refactors</div></div>
+    <div style="text-align:center;"><div style="font-size:48px;font-weight:800;color:var(--accent);letter-spacing:-.03em;">1</div><div style="font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-top:6px;">new files only</div></div>
+  </div>
+</div>
+
+<!-- ══ 7  3 LAYERS OVERVIEW ══════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">Evaluation Design</div>
+  <h2><span>15 evaluators</span> across 3 layers</h2>
+  <div class="divider"></div>
+  <div class="g3" style="max-width:860px;">
+    <div class="card">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent2);margin-bottom:12px;">Layer 1 — Deterministic</div>
+      <div class="ct" style="margin-bottom:8px;">Pipeline health</div>
+      <div class="cb">Did the agent complete? Did all stages run? Are all required fields present?<br><br>
+        <strong style="color:var(--text)">Free to run</strong> — pure code, no LLM cost.</div>
+    </div>
+    <div class="card">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--accent2);margin-bottom:12px;">Layer 2 — Deterministic</div>
+      <div class="ct" style="margin-bottom:8px;">Behaviour checks</div>
+      <div class="cb">Did it use the right tools? Was it efficient? Did it use the knowledge graph when available?<br><br>
+        <strong style="color:var(--text)">Free to run</strong> — checks tool call lists.</div>
+    </div>
+    <div class="card">
+      <div style="font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--yellow);margin-bottom:12px;">Layer 3 — LLM Judge</div>
+      <div class="ct" style="margin-bottom:8px;">Quality judgements</div>
+      <div class="cb">Did it catch the right risks? Are test specs useful? Are claims grounded in real code?<br><br>
+        <strong style="color:var(--text)">Scored by Claude</strong> — 0.0 to 1.0 with reasoning.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 8  LAYER 1 DEEP DIVE ═══════════════════════════════════════ -->
+<div class="slide left">
+  <div class="eyebrow" style="align-self:flex-start;">Layer 1 — Pipeline Health</div>
+  <h2 style="align-self:flex-start;">Did the pipeline <span>complete correctly?</span></h2>
+  <div class="divider"></div>
+
+  <div class="eval-row">
+    <span class="er-badge det">binary</span>
+    <div class="er-body">
+      <div class="er-title">no_crash</div>
+      <div class="er-question">"Did the agent finish without an error?"</div>
+      <div class="er-how">Returns 1.0 if <code>affected_components</code> is non-empty in the output. Returns 0.0 if an error key is present. Returns 0.5 if it completed but found nothing.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">ratio</span>
+    <div class="er-body">
+      <div class="er-title">pipeline_progression</div>
+      <div class="er-question">"Did the agent reach all expected stages?"</div>
+      <div class="er-how">Checks <code>stages_seen</code> against the expected list for the path taken.<br>
+        Integration path expects: <code>gather → unit_tests → integration_tests</code><br>
+        Score = stages hit / stages expected.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">avg</span>
+    <div class="er-body">
+      <div class="er-title">output_completeness</div>
+      <div class="er-question">"Did every component have all 5 required fields filled?"</div>
+      <div class="er-how">For each component: checks <code>component name</code>, <code>files_changed</code>, <code>impact_summary</code>, <code>risks</code>, <code>confidence</code> — scores filled/5, then averages across components.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">ratio</span>
+    <div class="er-body">
+      <div class="er-title">component_count</div>
+      <div class="er-question">"Did the agent find enough components?"</div>
+      <div class="er-how">Score = <code>min(1.0, found / expected_minimum)</code>. Each dataset example specifies a <code>min_components</code> threshold from human review.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 9  LAYER 2 DEEP DIVE ═══════════════════════════════════════ -->
+<div class="slide left">
+  <div class="eyebrow" style="align-self:flex-start;">Layer 2 — Behaviour</div>
+  <h2 style="align-self:flex-start;">Did the agent <span>behave correctly?</span></h2>
+  <div class="divider"></div>
+
+  <div class="eval-row">
+    <span class="er-badge det">ratio</span>
+    <div class="er-body">
+      <div class="er-title">tool_coverage</div>
+      <div class="er-question">"Did the agent call all the tools it should have?"</div>
+      <div class="er-how">Score = <code>|called ∩ expected| / |expected|</code>. Each dataset example lists the tools a thorough analysis requires (e.g. <code>get_file_contents</code>, <code>impact</code>, <code>submit_unit_tests</code>).</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">penalty</span>
+    <div class="er-body">
+      <div class="er-title">tool_efficiency</div>
+      <div class="er-question">"Did the agent waste tool calls by repeating itself?"</div>
+      <div class="er-how">Counts any tool called more than 4 times as "redundant". Score = <code>1 − (redundant / total)</code>. Submit tools are excluded from this check.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">binary</span>
+    <div class="er-body">
+      <div class="er-title">gitnexus_usage</div>
+      <div class="er-question">"Did the agent use the knowledge graph when the repo was indexed?"</div>
+      <div class="er-how">Only applies when <code>expect_gitnexus=True</code> in the dataset. Checks that at least 2 of <code>impact, context, query, cypher</code> were called. Returns N/A (1.0) for GitHub-only repos.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge det">ratio</span>
+    <div class="er-body">
+      <div class="er-title">confidence_calibration</div>
+      <div class="er-question">"Is the agent's confidence level realistic?"</div>
+      <div class="er-how">For non-indexed repos: expects all components to have <code>confidence="low"</code> (no graph data). For indexed repos: expects at least half to be <code>medium</code> or <code>high</code>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 10  LAYER 3 DEEP DIVE ══════════════════════════════════════ -->
+<div class="slide left">
+  <div class="eyebrow" style="align-self:flex-start;">Layer 3 — LLM Judges</div>
+  <h2 style="align-self:flex-start;">Did the agent produce <span>quality output?</span></h2>
+  <div class="divider"></div>
+
+  <div class="eval-row">
+    <span class="er-badge llm">judge</span>
+    <div class="er-body">
+      <div class="er-title">risk_quality</div>
+      <div class="er-question">"Did the agent catch the risks a human reviewer identified?"</div>
+      <div class="er-how">Claude is given the agent's risks and the golden expected risks. It scores recall (were the expected concerns found?), precision (were extra risks relevant?), and penalises missed critical ones. Exact wording doesn't matter — semantic match counts.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge llm">judge</span>
+    <div class="er-body">
+      <div class="er-title">component_matching</div>
+      <div class="er-question">"Did the agent name components the same way a human would?"</div>
+      <div class="er-how">"ReAct Agent Core" should match "ReAct Agent". Exact string comparison would fail — Claude judges semantic equivalence between the agent's names and the golden names.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge llm">judge</span>
+    <div class="er-body">
+      <div class="er-title">groundedness</div>
+      <div class="er-question">"Are the agent's claims backed by real code changes?"</div>
+      <div class="er-how">Claude is given the PR URL and the full analysis. It asks: "could a human reading the same PR arrive at these claims?" Penalises hallucinated file names, invented risks, or fabricated symbols.</div>
+    </div>
+  </div>
+  <div class="eval-row">
+    <span class="er-badge llm">judge</span>
+    <div class="er-body">
+      <div class="er-title">unit_test_quality &amp; integration_test_quality</div>
+      <div class="er-question">"Are the generated test specs actually useful to a developer?"</div>
+      <div class="er-how">Claude checks: Are targets specific real symbols? Do test cases cover edge cases? Are mocks appropriate? Are integration points real cross-module boundaries? Returns 0.0–1.0 with reasoning.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 11  RESULTS ════════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">integration-github · 7 external PRs</div>
+  <h2>Our <span>results</span></h2>
+  <div class="divider" style="margin:16px auto;"></div>
+  <div class="score-grid">
+
+    <!-- Left column -->
+    <div>
+      <div class="score-section-label">Pipeline Health</div>
+
+      <div class="score-row" style="margin-top:8px;">
+        <div class="score-label">no_crash</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:100%"></div></div>
+        <div class="score-num" style="color:var(--green)">1.00</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">pipeline_progression</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:100%"></div></div>
+        <div class="score-num" style="color:var(--green)">1.00</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">output_completeness</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:100%"></div></div>
+        <div class="score-num" style="color:var(--green)">1.00</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">component_count</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:100%"></div></div>
+        <div class="score-num" style="color:var(--green)">1.00</div>
+      </div>
+
+      <div class="score-section-label">Behaviour</div>
+
+      <div class="score-row" style="margin-top:8px;">
+        <div class="score-label">tool_efficiency</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:89%"></div></div>
+        <div class="score-num" style="color:var(--green)">0.89</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">tool_coverage</div>
+        <div class="score-track"><div class="score-fill fill-green" style="width:86%"></div></div>
+        <div class="score-num" style="color:var(--green)">0.86</div>
+      </div>
+    </div>
+
+    <!-- Right column -->
+    <div>
+      <div class="score-section-label">Quality (LLM Judges)</div>
+
+      <div class="score-row" style="margin-top:8px;">
+        <div class="score-label">groundedness</div>
+        <div class="score-track"><div class="score-fill fill-yellow" style="width:72%"></div></div>
+        <div class="score-num" style="color:var(--yellow)">0.72</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">risk_quality</div>
+        <div class="score-track"><div class="score-fill fill-yellow" style="width:66%"></div></div>
+        <div class="score-num" style="color:var(--yellow)">0.66</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">component_matching</div>
+        <div class="score-track"><div class="score-fill fill-yellow" style="width:64%"></div></div>
+        <div class="score-num" style="color:var(--yellow)">0.64</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">unit_test_structure</div>
+        <div class="score-track"><div class="score-fill fill-yellow" style="width:71%"></div></div>
+        <div class="score-num" style="color:var(--yellow)">0.71</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">unit_test_quality</div>
+        <div class="score-track"><div class="score-fill fill-yellow" style="width:48%"></div></div>
+        <div class="score-num" style="color:var(--yellow)">0.48</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">integration_test_structure</div>
+        <div class="score-track"><div class="score-fill fill-red" style="width:29%"></div></div>
+        <div class="score-num" style="color:var(--red)">0.29</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">integration_test_quality</div>
+        <div class="score-track"><div class="score-fill fill-red" style="width:18%"></div></div>
+        <div class="score-num" style="color:var(--red)">0.18</div>
+      </div>
+      <div class="score-row">
+        <div class="score-label">confidence_calibration</div>
+        <div class="score-track"><div class="score-fill fill-red" style="width:18%"></div></div>
+        <div class="score-num" style="color:var(--red)">0.18</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ 12  READING THE RESULTS ════════════════════════════════════ -->
+<div class="slide left">
+  <div class="eyebrow" style="align-self:flex-start;">Interpreting Results</div>
+  <h2 style="align-self:flex-start;">What the scores <span>tell us</span></h2>
+  <div class="divider"></div>
+
+  <div class="insight good">
+    <div class="insight-icon">✅</div>
+    <div class="insight-body">
+      <div class="it">Pipeline is solid</div>
+      <div class="id">no_crash, pipeline_progression, output_completeness, component_count all at 1.00. The agent reliably completes the full pipeline and finds at least the minimum expected components on every PR.</div>
+    </div>
+  </div>
+  <div class="insight good">
+    <div class="insight-icon">✅</div>
+    <div class="insight-body">
+      <div class="it">Tool usage is healthy</div>
+      <div class="id">tool_efficiency 0.89 means the agent rarely repeats itself. tool_coverage 0.86 means it usually calls the right tools — only missing some on simpler PRs where fewer tools are needed.</div>
+    </div>
+  </div>
+  <div class="insight warn">
+    <div class="insight-icon">⚠️</div>
+    <div class="insight-body">
+      <div class="it">Risk detection needs improvement</div>
+      <div class="id">risk_quality 0.66 and groundedness 0.72 — the agent finds roughly 2/3 of the risks a human reviewer would flag. It misses subtle edge cases and sometimes introduces weakly-grounded claims.</div>
+    </div>
+  </div>
+  <div class="insight bad">
+    <div class="insight-icon">🔴</div>
+    <div class="insight-body">
+      <div class="it">Integration tests are the weakest point</div>
+      <div class="id">integration_test_structure 0.29 and quality 0.18 — the agent often exhausts its tool budget on research without calling submit. Confidence calibration 0.18 shows it's also rating non-indexed repos too highly.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 13  SCREENSHOT SLIDE ═══════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">LangSmith in Action</div>
+  <h2>Every run is <span>fully traceable</span></h2>
+  <div class="divider"></div>
+  <div class="g2" style="max-width:900px; gap:16px;">
+    <img src="Tools%20are%20traceable.png"
+         style="width:100%; border-radius:10px; border:1px solid var(--border);"
+         alt="Tool calls are fully traceable in LangSmith" />
+    <img src="Quality%20reasoning%20and%20traces.png"
+         style="width:100%; border-radius:10px; border:1px solid var(--border);"
+         alt="Evaluation scores and LLM judge reasoning" />
+  </div>
+  <p class="subtitle" style="margin-top:20px; font-size:13px;">
+    Inspect <strong style="color:var(--text)">every tool call</strong> in a single run —
+    what arguments were passed, what was returned, where it went wrong.
+  </p>
+</div>
+
+<!-- ══ 14  DEVELOPER LOOP ════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">The Loop</div>
+  <h2>Change → Test → <span>Compare</span></h2>
+  <div class="divider"></div>
+  <div class="flow-col">
+    <div class="flow-step">
+      <div class="step-num">1</div>
+      <div>
+        <div class="step-title">Change a prompt or model</div>
+        <div class="step-desc">Edit the gather/integration/e2e system prompt, swap model, adjust budget limit.</div>
+      </div>
+    </div>
+    <div class="flow-step">
+      <div class="step-num">2</div>
+      <div>
+        <div class="step-title">Run evals</div>
+        <div class="step-desc"><code>python -m evals.run_evals --suite integration --dataset github</code></div>
+      </div>
+    </div>
+    <div class="flow-step hl">
+      <div class="step-num" style="color:var(--accent);">3</div>
+      <div>
+        <div class="step-title" style="color:var(--accent)">Compare in LangSmith</div>
+        <div class="step-desc">Side-by-side score diff for every metric — see exactly which evaluators improved and which regressed.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ 15  SUMMARY ════════════════════════════════════════════════ -->
+<div class="slide">
+  <div class="eyebrow">Summary</div>
+  <h2>From <span>"looks good"</span><br>to reproducible scores</h2>
+  <div class="divider" style="margin:20px auto;"></div>
+  <div class="g2" style="max-width:840px;">
+    <div class="card hl">
+      <div class="ci">📌</div>
+      <div class="ct">The problem</div>
+      <div class="cb">AI agents are non-deterministic, multi-step, and silent when they regress. Manual review doesn't scale.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">🗂️</div>
+      <div class="ct">Golden dataset</div>
+      <div class="cb">8 real PRs, expert-labeled with expected components, risks, and required tools.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">📐</div>
+      <div class="ct">3 evaluator layers</div>
+      <div class="cb">Pipeline health (free), behaviour checks (free), LLM quality judges — 15 metrics total.</div>
+    </div>
+    <div class="card hl">
+      <div class="ci">🔍</div>
+      <div class="ct">What we found</div>
+      <div class="cb">Pipeline: solid. Risk detection: decent. Integration tests + confidence calibration: next targets.</div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /deck -->
+
+<div id="nav">
+  <button class="nb" id="pb" onclick="go(-1)" disabled>← Prev</button>
+  <span id="sc">1 / 15</span>
+  <button class="nb" id="nb" onclick="go(1)">Next →</button>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let cur = 0;
+  const sc = document.getElementById('sc');
+  const pb = document.getElementById('pb');
+  const nb = document.getElementById('nb');
+  const prog = document.getElementById('prog');
+
+  function show(i) {
+    slides[cur].classList.remove('active');
+    cur = Math.max(0, Math.min(total - 1, i));
+    slides[cur].classList.add('active');
+    sc.textContent = `${cur + 1} / ${total}`;
+    pb.disabled = cur === 0;
+    nb.disabled = cur === total - 1;
+    prog.style.width = `${((cur + 1) / total) * 100}%`;
+  }
+
+  function go(d) { show(cur + d); }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') go(1);
+    if (e.key === 'ArrowLeft') go(-1);
+  });
+
+  show(0);
+</script>
+</body>
+</html>
