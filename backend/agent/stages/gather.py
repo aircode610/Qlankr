@@ -13,7 +13,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, GATHER_PROMPT
-from agent.tools import filter_tools, get_mcp_client
+from agent.tools import filter_tools, get_mcp_client, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -26,7 +26,7 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
     client = get_mcp_client()
     all_tools = await client.get_tools()
     print(f"[gather] got {len(all_tools)} tools, filtering to gather stage...", flush=True)
-    stage_tools = filter_tools(all_tools, "gather")
+    stage_tools = safe_tools(filter_tools(all_tools, "gather"))
 
     class _GatherOutput(BaseModel):
         pr_title: str

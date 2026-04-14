@@ -95,6 +95,25 @@ def get_mcp_client() -> MultiServerMCPClient:
     return MultiServerMCPClient(_server_config())
 
 
+def safe_tools(tools: list) -> list:
+    """Wrap each tool so MCP errors become ToolMessages instead of exceptions."""
+    wrapped = []
+    for tool in tools:
+        original_coro = tool.coroutine
+        if original_coro is None:
+            wrapped.append(tool)
+            continue
+
+        async def _safe(*args, _coro=original_coro, **kwargs):
+            try:
+                return await _coro(*args, **kwargs)
+            except Exception as e:
+                return f"Tool error: {e}"
+
+        wrapped.append(tool.copy(update={"coroutine": _safe, "func": None}))
+    return wrapped
+
+
 def filter_tools(all_tools: list, stage: str) -> list:
     """
     Return only the tools allowed for the given stage.
