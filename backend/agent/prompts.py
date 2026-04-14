@@ -13,42 +13,42 @@ is needed.
 
 ## Your Environment
 
-**1. The pull request** — via GitHub MCP tools.
+**1. The pull request** ? via GitHub MCP tools.
 The PR diff, file list, comments, and full file contents tell you what changed and why.
 
-**2. The knowledge graph** — via GitNexus MCP tools.
+**2. The knowledge graph** ? via GitNexus MCP tools.
 The repo has been pre-indexed into a call graph. Every function, class, file, import,
 and execution flow is a node or edge.
 
 Available GitNexus tools:
-- impact     — blast-radius for a symbol: risk level, affected processes, dependent depth
-- context    — 360° caller/callee view for a symbol
-- query      — hybrid semantic+BM25 search over execution flows
-- cypher     — raw Cypher queries for anything the above don't cover
-- list_repos — list indexed repos with stats
-- detect_changes — compares local git diff to graph (not useful for remote PRs)
-- list_processes — list all execution flows (processes) in the repo
-- get_process    — fetch the full step-by-step flow for one process
+- impact     ? blast-radius for a symbol: risk level, affected processes, dependent depth
+- context    ? 360? caller/callee view for a symbol
+- query      ? hybrid semantic+BM25 search over execution flows
+- cypher     ? raw Cypher queries for anything the above don't cover
+- list_repos ? list indexed repos with stats
+- detect_changes ? compares local git diff to graph (not useful for remote PRs)
+- list_processes ? list all execution flows (processes) in the repo
+- get_process    ? fetch the full step-by-step flow for one process
 
-**3. The repo name** — passed to you in the initial message.
+**3. The repo name** ? passed to you in the initial message.
 Pass it as `repo=<name>` on every GitNexus tool call.
 
 ## Graph Schema (for Cypher queries)
 
 Nodes: File, Function, Class, Method, Interface, Community, Process
 Relationships: ALL stored as `[:CodeRelation]` with a `type` property:
-  - `r.type = 'DEFINES'`         — File defines a symbol
-  - `r.type = 'CALLS'`           — symbol calls another symbol
-  - `r.type = 'IMPORTS'`         — File imports another File
-  - `r.type = 'MEMBER_OF'`       — symbol belongs to a Community cluster
-  - `r.type = 'STEP_IN_PROCESS'` — symbol is a step in an execution flow
+  - `r.type = 'DEFINES'`         ? File defines a symbol
+  - `r.type = 'CALLS'`           ? symbol calls another symbol
+  - `r.type = 'IMPORTS'`         ? File imports another File
+  - `r.type = 'MEMBER_OF'`       ? symbol belongs to a Community cluster
+  - `r.type = 'STEP_IN_PROCESS'` ? symbol is a step in an execution flow
 
 Key facts:
 - `impact` and `context` take a **symbol name**, NOT a file path
 - To find symbols in a file: MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
   AND f.filePath='<path>' RETURN s.name LIMIT 20
-- Files added by the PR won't be in the graph yet — note "new file — graph data unavailable"
-- All graph edges are `[:CodeRelation]` — filter by `r.type`
+- Files added by the PR won't be in the graph yet ? note "new file ? graph data unavailable"
+- All graph edges are `[:CodeRelation]` ? filter by `r.type`
 
 ## Rules
 
@@ -57,6 +57,11 @@ Key facts:
 - Always pass `repo=<repo_name>` to every GitNexus tool call.
 - Ground every claim in tool output. Do not invent data.
 - For new files not yet in the graph: set confidence to "low".
+- CRITICAL: GitNexus tools only accept ASCII characters in arguments.
+  Before passing any text to a GitNexus tool (cypher, query, impact, context, etc.),
+  replace all non-ASCII characters with ASCII equivalents:
+  em dash (--), smart quotes (""/'' -> ""/'), arrows (->) etc.
+  Never copy-paste PR content directly into GitNexus tool arguments without sanitizing.
 """
 
 # ── Stage prompts ─────────────────────────────────────────────────────────────
@@ -66,8 +71,8 @@ Key facts:
 GATHER_PROMPT = """\
 ## Current Stage: Context Gathering
 
-Your goal is to pre-fetch all context the downstream stages need.
-COLLECT only — do not analyse, generate test specs, or draw conclusions yet.
+Your goal is to pre-fetch all context the downstream stages need AND perform
+an initial impact assessment per component.
 
 ### Your task
 1. Fetch PR metadata: title, description, author via `get_pull_request`
@@ -75,39 +80,47 @@ COLLECT only — do not analyse, generate test specs, or draw conclusions yet.
 3. For each changed file, find its defined symbols via Cypher:
    MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
    AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 30
-4. Fetch the repo's process list via `list_repos` (stats include process count and names)
-5. Write an initial `affected_components` list: component name + changed files.
-   No test specs yet — just names and file paths.
+4. For key symbols, call `impact` to get blast radius and risk level
+5. Group changed files into logical components and for each produce:
+   - component: short descriptive name
+   - files_changed: list of file paths
+   - impact_summary: 1-2 sentence plain-English description of what breaks if this changes
+   - risks: list of specific risk strings (e.g. "save corruption if X is called before Y")
+   - confidence: "high" (symbol in graph, callers found) | "medium" (partial data) |
+                 "low" (new file, no graph data yet)
 
 ### Output
-Populate state with:
-- pr_diff, pr_files, pr_metadata
-- processes (list of {name, description})
-- affected_components (list of {component, files_changed})
+Call `submit_gather` with:
+- pr_title, pr_description, pr_author, pr_files, pr_diff
+- affected_components — list of objects with ALL five fields above
 
 ### Allowed tools
 get_pull_request, get_pull_request_files, get_pull_request_comments,
 get_file_contents, list_directory, search_code, get_commits,
-list_repos, cypher, detect_changes
+list_repos, impact, cypher, detect_changes
 
 ### Budget: 10 tool calls maximum
 Stop and output what you have when you reach 10 calls.
+Use confidence="low" and a best-effort impact_summary for any component you
+couldn't fully analyse before hitting the budget.
 """
 
 UNIT_PROMPT = """\
 ## Current Stage: Unit Test Generation
 
-For each affected component identified in the gather stage, generate unit test
-specifications. Use the tools to understand each symbol's interface before writing specs.
+For each affected component, generate unit test specifications by reading the code
+and understanding each symbol's interface. Use tools only to gather information —
+your output MUST be delivered by calling `submit_unit_tests` for every component.
 
 ### Your task
-For each changed symbol in `affected_components`:
-1. Use `context` to understand its callers, callees, and dependencies
-2. Use `get_file_contents` to read the actual implementation if needed
-3. Use `cypher` to find type signatures or related symbols if context is unclear
-4. Generate a UnitTestSpec for each symbol
+For each component in the list:
+1. Use `get_file_contents` to read the changed files
+2. Use `context` to understand callers, callees, and dependencies (if available)
+3. Use `cypher` to find type signatures or related symbols (if available)
+4. Identify the key symbols (functions, methods, classes) that changed
+5. Call `submit_unit_tests` with the component name and its UnitTestSpec list
 
-### Output schema: UnitTestSpec
+### UnitTestSpec schema
 ```
 {
   "target": "SymbolName.methodName",         // symbol under test
@@ -123,12 +136,16 @@ For each changed symbol in `affected_components`:
 }
 ```
 
+### Rules
+- MUST call `submit_unit_tests` once per component — text output is ignored
+- Call it immediately after analysing a component, before moving to the next
+- If tools are unavailable, generate specs from file contents alone
+- If budget runs low, reduce test cases per symbol rather than skipping components
+
 ### Allowed tools
-context, cypher, get_file_contents
+context, cypher, get_file_contents, submit_unit_tests
 
 ### Budget: 15 tool calls maximum
-If budget runs low, reduce test cases per symbol rather than skipping symbols.
-Set priority to "low" and note limited analysis for symbols you couldn't fully examine.
 """
 
 INTEGRATION_PROMPT = """\
@@ -140,7 +157,7 @@ identify where module boundaries are crossed.
 
 ### Your task
 For each changed symbol:
-1. Use `impact` to find blast radius — which modules and processes depend on it
+1. Use `impact` to find blast radius ? which modules and processes depend on it
 2. Use `context` to map caller/callee chains that cross module boundaries
 3. Use `query` (semantic search) to find related execution flows
 4. Use `cypher` for precise relationship queries if needed
@@ -165,12 +182,15 @@ For each changed symbol:
 }
 ```
 
+### Rules
+- MUST call `submit_integration_tests` once when done — text output is ignored
+- Only report integration points you found via tools — do not guess
+- Rate risk based on blast radius depth and process involvement
+
 ### Allowed tools
-impact, context, query, cypher
+impact, context, query, cypher, submit_integration_tests
 
 ### Budget: 15 tool calls maximum
-Do not guess module boundaries — only report integrations you found via tools.
-Rate risk based on blast radius depth and process involvement.
 """
 
 E2E_PROMPT = """\
@@ -208,12 +228,17 @@ that a QA tester can execute manually. Write for a tester, not a developer.
 }
 ```
 
+### Rules
+- MUST call `submit_e2e_plans` once when done — text output is ignored
+- Prioritise CRITICAL processes first
+- If budget runs low, output plans for higher-priority processes only
+- Use `ask_user` when you need information you cannot determine from the PR or code
+  (e.g. expected user-facing behaviour, exact UX flow, domain rules). Ask specific questions.
+
 ### Allowed tools
-impact, query, cypher, list_processes, get_process
+impact, query, cypher, list_processes, get_process, ask_user, submit_e2e_plans
 
 ### Budget: 20 tool calls maximum
-Prioritise CRITICAL processes first. If budget runs low, output plans for higher-priority
-processes only and note which processes were not covered.
 """
 
 # ── Utility messages ──────────────────────────────────────────────────────────

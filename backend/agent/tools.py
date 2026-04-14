@@ -1,4 +1,5 @@
 import os
+import shutil
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -17,6 +18,7 @@ GATHER_TOOLS: set[str] = {
     "search_code",
     "get_commits",
     "list_repos",
+    "impact",
     "cypher",
     "detect_changes",
 }
@@ -51,6 +53,7 @@ _STAGE_TOOLS: dict[str, set[str]] = {
 
 
 def _server_config() -> dict:
+    import shutil
     utf8_env = {
         **os.environ,
         "PYTHONUTF8": "1",
@@ -58,7 +61,7 @@ def _server_config() -> dict:
         "LANG": "en_US.UTF-8",
         "LC_ALL": "en_US.UTF-8",
     }
-    return {
+    config = {
         "github": {
             "transport": "stdio",
             "command": "npx",
@@ -69,13 +72,16 @@ def _server_config() -> dict:
                 "GITHUB_PERSONAL_ACCESS_TOKEN": os.environ.get("GITHUB_TOKEN", ""),
             },
         },
-        "gitnexus": {
+    }
+    # Only include GitNexus if the binary is available (not present in local dev)
+    if shutil.which("gitnexus"):
+        config["gitnexus"] = {
             "transport": "stdio",
             "command": "gitnexus",
             "args": ["mcp"],
             "env": utf8_env,
-        },
-    }
+        }
+    return config
 
 
 def get_mcp_client() -> MultiServerMCPClient:

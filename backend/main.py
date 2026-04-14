@@ -115,7 +115,7 @@ async def debug_mcp_call(req: _DebugCallRequest):
     if req.tool not in tool_map:
         raise HTTPException(
             status_code=404,
-            detail=f"tool {req.tool!r} not found — available: {sorted(tool_map)}",
+            detail=f"tool {req.tool!r} not found ? available: {sorted(tool_map)}",
         )
     raw = await tool_map[req.tool].ainvoke(req.args)
     return {"tool": req.tool, "args": req.args, "result": _unwrap(raw)}
@@ -123,13 +123,25 @@ async def debug_mcp_call(req: _DebugCallRequest):
 
 @app.post("/analyze")
 async def analyze(request: AnalyzeRequest):
-    # Wired to run_agent() in task A5 once Person B delivers agent/agent.py
     async def generate():
-        try:
-            from agent.agent import run_agent  # noqa: PLC0415
-            async for event in run_agent(request.pr_url):
-                yield sse_event(event)
-        except ImportError:
-            yield sse_event(ErrorEvent(message="Agent not yet implemented"))
+        from agent.agent import run_agent  # noqa: PLC0415
+        async for event in run_agent(
+            request.pr_url,
+            context=request.context,
+            session_id=request.session_id,
+        ):
+            yield sse_event(event)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/analyze/{session_id}/continue")
+async def analyze_continue(session_id: str, user_response: dict):
+    # TODO: Dev C — replace user_response with ContinueRequest model once
+    # devc/testing-models lands. For now accepts raw dict matching interrupt type.
+    async def generate():
+        from agent.agent import continue_agent  # noqa: PLC0415
+        async for event in continue_agent(session_id, user_response):
+            yield sse_event(event)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
