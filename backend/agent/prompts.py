@@ -77,17 +77,20 @@ an initial impact assessment per component.
 ### Your task
 1. Fetch PR metadata: title, description, author via `get_pull_request`
 2. Fetch the changed file list and diff via `get_pull_request_files`
-3. For each changed file, find its defined symbols via Cypher:
+3. **If a GitNexus repo is available** (repo name provided): for each changed file,
+   find its defined symbols via Cypher:
    MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
    AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 30
-4. For key symbols, call `impact` to get blast radius and risk level
-5. Group changed files into logical components and for each produce:
+   Then call `impact` on 1-2 key symbols to get blast radius and risk level.
+   This is REQUIRED when the repo is indexed — do not skip it.
+4. Group changed files into logical components and for each produce:
    - component: short descriptive name
    - files_changed: list of file paths
    - impact_summary: 1-2 sentence plain-English description of what breaks if this changes
    - risks: list of specific risk strings (e.g. "save corruption if X is called before Y")
-   - confidence: "high" (symbol in graph, callers found) | "medium" (partial data) |
-                 "low" (new file, no graph data yet)
+   - confidence: "high" (symbol in graph, callers found via impact) |
+                 "medium" (partial graph data) |
+                 "low" (new file, no graph data, or no repo indexed)
 
 ### Output
 Call `submit_gather` with:
@@ -186,11 +189,13 @@ For each changed symbol:
 - MUST call `submit_integration_tests` once when done — text output is ignored
 - Only report integration points you found via tools — do not guess
 - Rate risk based on blast radius depth and process involvement
+- **Budget discipline**: after 10 research tool calls, stop researching and submit.
+  Partial results are better than none. Use what you found.
 
 ### Allowed tools
 impact, context, query, cypher, submit_integration_tests
 
-### Budget: 15 tool calls maximum
+### Budget: 15 tool calls maximum (reserve the last 5 for synthesis + submit)
 """
 
 E2E_PROMPT = """\
@@ -232,13 +237,12 @@ that a QA tester can execute manually. Write for a tester, not a developer.
 - MUST call `submit_e2e_plans` once when done — text output is ignored
 - Prioritise CRITICAL processes first
 - If budget runs low, output plans for higher-priority processes only
-- Use `ask_user` when you need information you cannot determine from the PR or code
-  (e.g. expected user-facing behaviour, exact UX flow, domain rules). Ask specific questions.
+- **Budget discipline**: after 15 research tool calls, stop and submit what you have.
 
 ### Allowed tools
-impact, query, cypher, list_processes, get_process, ask_user, submit_e2e_plans
+impact, query, cypher, list_processes, get_process, submit_e2e_plans
 
-### Budget: 20 tool calls maximum
+### Budget: 20 tool calls maximum (reserve the last 5 for synthesis + submit)
 """
 
 # ── Utility messages ──────────────────────────────────────────────────────────

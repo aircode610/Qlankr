@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
-from langgraph.types import interrupt
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
 from agent.tools import filter_tools, get_mcp_client, safe_tools, make_process_tools
@@ -41,11 +40,6 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
         e2e_results.extend(e2e_test_plans)
         return "E2E test plans recorded."
 
-    def ask_user(question: str) -> str:
-        """Ask the human a question when you need information to proceed."""
-        response = interrupt({"type": "question", "question": question})
-        return response.get("answer", "")
-
     submit_tool = StructuredTool.from_function(
         func=submit_e2e_plans,
         name="submit_e2e_plans",
@@ -55,18 +49,6 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
             "process (str), scenario (str), preconditions (str), "
             "steps [{step, action, expected}], affected_by_pr (list), "
             "priority ('CRITICAL'|'HIGH'|'MEDIUM'|'LOW'), estimated_duration (str)."
-        ),
-    )
-
-    ask_user_tool = StructuredTool.from_function(
-        func=ask_user,
-        name="ask_user",
-        description=(
-            "Ask the human a specific question when you need information to continue. "
-            "Use this when you don't know the user flow, expected behavior, or any scenario detail "
-            "that can't be determined from the PR or code. "
-            "Pass question as a clear, specific question string. "
-            "Do NOT use this for general clarifications — only when genuinely stuck."
         ),
     )
 
@@ -98,7 +80,7 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     agent = create_react_agent(
         model=llm,
-        tools=stage_tools + [submit_tool, ask_user_tool],
+        tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
     )
 

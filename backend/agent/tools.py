@@ -96,7 +96,13 @@ def get_mcp_client() -> MultiServerMCPClient:
 
 
 def safe_tools(tools: list) -> list:
-    """Wrap each tool so MCP errors become ToolMessages instead of exceptions."""
+    """Wrap each tool so MCP errors become ToolMessages instead of exceptions.
+
+    MCP tools from langchain_mcp_adapters use response_format='content_and_artifact',
+    which requires the coroutine to return a (content, artifact) tuple.  Returning a
+    plain string causes a ValueError in LangChain's tool validation, so we check the
+    tool's response_format and return the appropriate type on error.
+    """
     wrapped = []
     for tool in tools:
         original_coro = tool.coroutine
@@ -104,11 +110,14 @@ def safe_tools(tools: list) -> list:
             wrapped.append(tool)
             continue
 
-        async def _safe(*args, _coro=original_coro, **kwargs):
+        is_artifact = getattr(tool, "response_format", None) == "content_and_artifact"
+
+        async def _safe(*args, _coro=original_coro, _artifact=is_artifact, **kwargs):
             try:
                 return await _coro(*args, **kwargs)
             except Exception as e:
-                return f"Tool error: {e}"
+                msg = f"Tool error: {e}"
+                return (msg, None) if _artifact else msg
 
         wrapped.append(tool.copy(update={"coroutine": _safe, "func": None}))
     return wrapped
