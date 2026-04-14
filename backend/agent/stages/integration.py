@@ -17,7 +17,7 @@ from langchain_core.tools import StructuredTool
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, INTEGRATION_PROMPT
-from agent.tools import filter_tools, get_mcp_client
+from agent.tools import filter_tools, get_mcp_client, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -32,7 +32,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
 
     client = get_mcp_client()
     all_tools = await client.get_tools()
-    stage_tools = filter_tools(all_tools, "integration")
+    stage_tools = safe_tools(filter_tools(all_tools, "integration"))
 
     integration_results: list[dict] = []
 

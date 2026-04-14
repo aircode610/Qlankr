@@ -18,7 +18,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.types import interrupt
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
-from agent.tools import filter_tools, get_mcp_client, make_process_tools
+from agent.tools import filter_tools, get_mcp_client, safe_tools, make_process_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -29,7 +29,7 @@ BUDGET = 20
 async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     client = get_mcp_client()
     all_tools = await client.get_tools()
-    stage_tools = filter_tools(all_tools, "e2e")
+    stage_tools = safe_tools(filter_tools(all_tools, "e2e"))
 
     repo_name = state.get("repo_name")
     if repo_name:

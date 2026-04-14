@@ -150,6 +150,7 @@ async def continue_analysis(session_id: str, req: ContinueRequest):
         if req.additional_context:
             user_response["context"] = req.additional_context
             user_response["feedback"] = req.additional_context
+            user_response["choice"] = req.additional_context  # for choice_node
         async for event in continue_agent(session_id, user_response):
             yield sse_event(event)
 
