@@ -61,9 +61,9 @@ BUG_MECHANICS_TOOLS: set[str] = {
     "get_file_contents",
     "search_code",
     "cypher",
+    "query",
     "context",
     "impact",
-    "detect_changes",
     "list_directory",
 }
 
@@ -79,6 +79,7 @@ BUG_REPRODUCTION_TOOLS: set[str] = {
 
 BUG_RESEARCH_TOOLS: set[str] = {
     "cypher",
+    "query",
     "jira_search",
     "jira_get_issue",
     "jira_get_comments",

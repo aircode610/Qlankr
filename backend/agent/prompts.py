@@ -379,8 +379,8 @@ components, and produce ranked root cause hypotheses backed by evidence.
   - `evidence`: specific file, line, or call chain that supports this hypothesis
 
 ### Allowed tools
-`get_file_contents`, `search_code`, `cypher`, `context`, `impact`, \
-`detect_changes`, `list_directory`
+`get_file_contents`, `search_code`, `cypher`, `query`, `context`, `impact`, \
+`list_directory`
 
 ### Budget: 15 tool calls maximum
 After 12 research calls, stop and submit with what you have.
