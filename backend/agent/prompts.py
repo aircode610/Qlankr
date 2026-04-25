@@ -386,6 +386,53 @@ components, and produce ranked root cause hypotheses backed by evidence.
 After 12 research calls, stop and submit with what you have.
 """
 
+BUG_REPRODUCTION_PROMPT = """\
+## Stage: Reproduction Planning
+
+**Goal:** Translate the confirmed code paths and root cause hypotheses into \
+clear, step-by-step reproduction instructions that a QA tester can follow \
+without reading any code.
+
+### Your task
+
+1. Read the mechanics output — use `code_paths`, `affected_components`, and
+   `root_cause_hypotheses` as your source of truth.
+
+2. Optionally use `get_file_contents` or `context` to clarify any step that
+   needs a concrete UI action or game state detail.
+
+3. Identify prerequisites — what game state, character setup, or data must
+   exist before the tester starts (e.g. "player must have 6+ items equipped").
+
+4. Identify environment requirements — OS, build version, platform, settings.
+
+5. Write sequential reproduction steps. Each step must be:
+   - Written for a QA tester, not a developer (no code, no class names)
+   - A single concrete action ("Open the world map and select a distant zone")
+   - Paired with an expected result ("All equipped items should remain equipped")
+
+6. Call `submit_reproduction` with all findings.
+
+### submit_reproduction parameters
+
+- `steps` — ordered list of `{step_number, action, expected_result}` objects
+  - minimum 3 steps, ideally 5-8
+  - `action`: what the tester does (plain English, no code)
+  - `expected_result`: what they should observe if the bug is present
+- `prerequisites` — list of plain-English setup conditions
+- `environment_requirements` — list of platform/build/settings requirements
+- `confidence` — high | medium | low
+  (high = steps directly derived from confirmed code path,
+   low = steps inferred from description only)
+
+### Allowed tools
+`get_file_contents`, `search_code`, `cypher`, `context`, \
+`list_directory`, `list_processes`, `get_process`
+
+### Budget: 12 tool calls maximum
+After 9 research calls, stop and submit with what you have.
+"""
+
 # ── Backward-compatibility alias ──────────────────────────────────────────────
 # agent.py (Sprint 1) imports SYSTEM_PROMPT. Keep this alias until Dev A's
 # StateGraph rewrite merges, at which point SYSTEM_PROMPT can be removed.

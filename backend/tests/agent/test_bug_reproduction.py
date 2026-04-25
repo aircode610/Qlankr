@@ -18,9 +18,7 @@ load_dotenv(Path(__file__).parent.parent.parent.parent / ".env", override=True)
 from agent.agent import BugReproductionState, _llm
 from agent.stages.bug_triage import triage_node
 from agent.stages.bug_mechanics import mechanics_node as mechanics_analysis_node
-
-# reproduction_planning_node not yet implemented
-reproduction_planning_node = None
+from agent.stages.bug_reproduction import reproduction_node as reproduction_planning_node
 
 # ── Sample bug description ────────────────────────────────────────────────────
 BUG_DESCRIPTION = """\
