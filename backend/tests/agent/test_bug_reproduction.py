@@ -19,6 +19,7 @@ from agent.agent import BugReproductionState, _llm
 from agent.stages.bug_triage import triage_node
 from agent.stages.bug_mechanics import mechanics_node as mechanics_analysis_node
 from agent.stages.bug_reproduction import reproduction_node as reproduction_planning_node
+from evals.bug_evaluators import mechanics_grounding, reproduction_executability, triage_accuracy
 
 # ── Sample bug description ────────────────────────────────────────────────────
 BUG_DESCRIPTION = """\
@@ -131,23 +132,40 @@ async def run_reproduction_only(mechanics_result: dict | None = None):
     return result
 
 
+def _print_evals(combined: dict) -> None:
+    print(f"\n{'='*60}")
+    print("=== EVALUATOR SCORES ===")
+    print(f"{'='*60}")
+    for ev in [triage_accuracy, mechanics_grounding, reproduction_executability]:
+        result = ev(combined)
+        score_bar = "█" * int(result["score"] * 10) + "░" * (10 - int(result["score"] * 10))
+        print(f"\n  {result['key']}")
+        print(f"  score   : {score_bar}  {result['score']:.2f}")
+        print(f"  summary : {result['comment']}")
+        for d in result.get("details", []):
+            icon = "✓" if d["passed"] else "✗"
+            print(f"    {icon} {d['check']:<45} {d['value']}")
+
+
 async def run_all():
-    print("Running full pipeline: triage → (mechanics → reproduction when implemented)\n")
+    print("Running full pipeline: triage → mechanics → reproduction\n")
     triage_result = await triage_node(initial_state)
     _print_result("triage", triage_result)
 
-    if mechanics_analysis_node is not None:
-        state_after_triage = {**initial_state, **triage_result}
-        mechanics_result = await mechanics_analysis_node(state_after_triage)
-        _print_result("mechanics", mechanics_result)
+    state_after_triage = {**initial_state, **triage_result}
+    mechanics_result = await mechanics_analysis_node(state_after_triage)
+    _print_result("mechanics", mechanics_result)
 
-        if reproduction_planning_node is not None:
-            state_after_mechanics = {**state_after_triage, **mechanics_result}
-            repro_result = await reproduction_planning_node(state_after_mechanics)
-            _print_result("reproduction", repro_result)
-            total = repro_result.get("tool_calls_used", 0)
-            print(f"\n{'='*60}")
-            print(f"Total tool calls across all stages: {total}")
+    state_after_mechanics = {**state_after_triage, **mechanics_result}
+    repro_result = await reproduction_planning_node(state_after_mechanics)
+    _print_result("reproduction", repro_result)
+
+    total = repro_result.get("tool_calls_used", 0)
+    print(f"\n{'='*60}")
+    print(f"Total tool calls across all stages: {total}")
+
+    combined = {**triage_result, **mechanics_result, **repro_result}
+    _print_evals(combined)
 
 
 async def main():
