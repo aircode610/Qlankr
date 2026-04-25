@@ -44,11 +44,69 @@ E2E_TOOLS: set[str] = {
     "get_process",
 }
 
+# ── Bug reproduction stage tool subsets ──────────────────────────────────────
+
+BUG_TRIAGE_TOOLS: set[str] = {
+    "jira_search",
+    "jira_get_issue",
+    "jira_get_comments",
+    "search_code",
+    "get_file_contents",
+    "cypher",
+    "impact",
+    "list_repos",
+}
+
+BUG_MECHANICS_TOOLS: set[str] = {
+    "get_file_contents",
+    "search_code",
+    "cypher",
+    "context",
+    "impact",
+    "detect_changes",
+    "list_directory",
+}
+
+BUG_REPRODUCTION_TOOLS: set[str] = {
+    "get_file_contents",
+    "search_code",
+    "cypher",
+    "context",
+    "list_directory",
+    "list_processes",
+    "get_process",
+}
+
+BUG_RESEARCH_TOOLS: set[str] = {
+    "cypher",
+    "jira_search",
+    "jira_get_issue",
+    "jira_get_comments",
+    "notion_search",
+    "notion_get_page",
+    "confluence_search",
+    "confluence_get_page",
+    "grafana_query_logs",
+    "kibana_search",
+    "sniffer_parse_har",
+    "sniffer_find_errors",
+}
+
+BUG_REPORT_TOOLS: set[str] = {
+    "jira_create_issue",
+    "jira_update_issue",
+}
+
 _STAGE_TOOLS: dict[str, set[str]] = {
     "gather": GATHER_TOOLS,
     "unit": UNIT_TOOLS,
     "integration": INTEGRATION_TOOLS,
     "e2e": E2E_TOOLS,
+    "bug_triage": BUG_TRIAGE_TOOLS,
+    "bug_mechanics": BUG_MECHANICS_TOOLS,
+    "bug_reproduction": BUG_REPRODUCTION_TOOLS,
+    "bug_research": BUG_RESEARCH_TOOLS,
+    "bug_report": BUG_REPORT_TOOLS,
 }
 
 

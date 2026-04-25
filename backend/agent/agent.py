@@ -55,6 +55,40 @@ class AnalysisState(TypedDict):
     unit_feedback: str | None      # user refinement feedback for unit rerun
 
 
+# ── Bug reproduction state ────────────────────────────────────────────────────
+
+class BugReproductionState(TypedDict):
+    # Input
+    description: str
+    environment: str | None
+    severity_input: str | None
+    repo_name: str | None
+    jira_ticket: str | None
+    attachments: list[str]
+    session_id: str
+
+    # Pre-fetched context
+    repo_stats: dict
+    processes: list[dict]
+
+    # Stage outputs
+    triage: dict
+    mechanics: dict
+    reproduction_plan: dict
+    research_findings: dict
+    bug_report: dict
+
+    # Orchestration
+    current_stage: str
+    tool_calls_used: int
+    messages: list
+    available_tools: list[str]
+
+    # Human-in-the-loop
+    mechanics_feedback: str | None
+    research_context: str | None
+
+
 # ── Graph nodes (stubs — implemented stage by stage) ─────────────────────────
 
 async def gather_node(state: AnalysisState) -> dict:
@@ -219,7 +253,7 @@ def build_analysis_graph():
 
 
 MAX_TOOL_CALLS = 25
-TIMEOUT_SECONDS = 300
+TIMEOUT_SECONDS = 600
 
 # ── Graph singleton ───────────────────────────────────────────────────────────
 # MemorySaver stores checkpoint state in-process — must be the same instance
