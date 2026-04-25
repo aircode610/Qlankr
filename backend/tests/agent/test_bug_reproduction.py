@@ -12,11 +12,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent.parent.parent / ".env", override=True)
+
 from agent.agent import BugReproductionState, _llm
 from agent.stages.bug_triage import triage_node
+from agent.stages.bug_mechanics import mechanics_node as mechanics_analysis_node
 
-# mechanics_analysis_node and reproduction_planning_node not yet implemented
-mechanics_analysis_node = None
+# reproduction_planning_node not yet implemented
 reproduction_planning_node = None
 
 # ── Sample bug description ────────────────────────────────────────────────────

@@ -335,6 +335,57 @@ If you reach the budget before calling submit_triage, call it immediately with w
 """
 
 
+BUG_MECHANICS_PROMPT = """\
+## Stage: Mechanics Analysis
+
+**Goal:** Trace the bug through the codebase, map call chains, identify affected \
+components, and produce ranked root cause hypotheses backed by evidence.
+
+### Your task
+
+1. Read the triage output — use `keywords`, `affected_files`, and `initial_hypotheses`
+   as your starting point.
+
+2. For each affected file from triage:
+   - Use `get_file_contents` to read the relevant code
+   - Use `cypher` to find symbols defined in that file:
+     ```
+     MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
+     AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 20
+     ```
+
+3. For each key symbol:
+   - Use `impact` to get blast radius (which other symbols depend on it)
+   - Use `context` to get caller/callee chains (who calls it and what it calls)
+
+4. Trace the full execution path from entry point to the failure point.
+   Build a `code_path` string like: `"ModuleA.methodX → ModuleB.methodY → ModuleC.reset"`
+
+5. Rank root cause hypotheses by confidence, each backed by specific evidence
+   from tool outputs (file contents, call chains, blast radius).
+
+6. Call `submit_mechanics` with all findings.
+
+### submit_mechanics parameters
+
+- `code_paths` — list of `{path, description, confidence}` objects
+  - `path`: call chain string (e.g. "FastTravel.execute → InventoryManager.reset")
+  - `description`: what goes wrong at this point
+  - `confidence`: high | medium | low
+- `affected_components` — list of component/module names (strings)
+- `root_cause_hypotheses` — list of `{hypothesis, confidence, evidence}` objects
+  - `hypothesis`: plain-English root cause description
+  - `confidence`: high | medium | low
+  - `evidence`: specific file, line, or call chain that supports this hypothesis
+
+### Allowed tools
+`get_file_contents`, `search_code`, `cypher`, `context`, `impact`, \
+`detect_changes`, `list_directory`
+
+### Budget: 15 tool calls maximum
+After 12 research calls, stop and submit with what you have.
+"""
+
 # ── Backward-compatibility alias ──────────────────────────────────────────────
 # agent.py (Sprint 1) imports SYSTEM_PROMPT. Keep this alias until Dev A's
 # StateGraph rewrite merges, at which point SYSTEM_PROMPT can be removed.
