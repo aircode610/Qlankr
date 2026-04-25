@@ -20,6 +20,7 @@ from agent.stages.bug_triage import triage_node
 from agent.stages.bug_mechanics import mechanics_node as mechanics_analysis_node
 from agent.stages.bug_reproduction import reproduction_node as reproduction_planning_node
 from agent.stages.bug_research import research_node
+from agent.stages.bug_report import report_node
 from evals.bug_evaluators import mechanics_grounding, reproduction_executability, triage_accuracy
 
 # ── Sample bug description ────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ _STAGE_KEY = {
     "mechanics": "mechanics",
     "reproduction": "reproduction_plan",
     "research": "research_findings",
+    "report": "bug_report",
 }
 
 
@@ -205,6 +207,45 @@ async def run_research_only(repro_result: dict | None = None):
     return result
 
 
+async def run_report_only(research_result: dict | None = None):
+    state = {**initial_state}
+    if research_result:
+        state = {**state, **research_result}
+    if not state.get("triage"):
+        state["triage"] = {
+            "bug_category": "gameplay",
+            "keywords": ["fast travel", "equip", "inventory"],
+            "severity": "high",
+            "affected_area": "fast travel / inventory system",
+            "affected_files": [],
+            "initial_hypotheses": ["InventoryManager.reset() called during zone transition"],
+            "confidence": "medium",
+        }
+    if not state.get("mechanics"):
+        state["mechanics"] = {
+            "code_paths": [{"path": "FastTravel.execute→ZoneManager.transition→InventoryManager.reset", "description": "Equipment cleared on transition", "confidence": "high"}],
+            "affected_components": ["FastTravelSystem", "InventoryManager", "ZoneManager"],
+            "root_cause_hypotheses": [
+                {"hypothesis": "InventoryManager.reset() drops equipped items during zone transition", "confidence": "high", "evidence": "code path ends in reset()"},
+            ],
+        }
+    if not state.get("reproduction_plan"):
+        state["reproduction_plan"] = {
+            "steps": [
+                {"step_number": 1, "action": "Equip 6 or more items on your character", "expected_result": "All items show as equipped in the inventory screen"},
+                {"step_number": 2, "action": "Open the world map and select a zone far from your current location", "expected_result": "Fast travel confirmation dialog appears"},
+                {"step_number": 3, "action": "Confirm fast travel", "expected_result": "Player teleports to the destination zone with all items still equipped"},
+            ],
+            "prerequisites": ["Player character with at least 6 item slots filled"],
+            "environment_requirements": ["Windows 10, build 2.4.1-beta"],
+            "confidence": "high",
+        }
+    print("Running report stage...", flush=True)
+    result = await report_node(state)
+    _print_result("report", result)
+    return result
+
+
 async def main():
     if STAGE == "all":
         await run_all()
@@ -214,6 +255,8 @@ async def main():
         await run_reproduction_only()
     elif STAGE == "research":
         await run_research_only()
+    elif STAGE == "report":
+        await run_report_only()
     else:
         await run_triage_only()
 
