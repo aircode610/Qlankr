@@ -1,8 +1,8 @@
 """
-Manual test for bug reproduction stages 1-3.
-Run from backend/: python -m tests.agent.test_bug_triage [stage]
+Manual test for bug reproduction stages 1-4.
+Run from backend/: python -m tests.agent.test_bug_reproduction [stage]
 
-Stages: triage (default), mechanics, reproduction, all
+Stages: triage (default), mechanics, reproduction, research, all
 """
 
 import asyncio
@@ -19,6 +19,7 @@ from agent.agent import BugReproductionState, _llm
 from agent.stages.bug_triage import triage_node
 from agent.stages.bug_mechanics import mechanics_node as mechanics_analysis_node
 from agent.stages.bug_reproduction import reproduction_node as reproduction_planning_node
+from agent.stages.bug_research import research_node
 from evals.bug_evaluators import mechanics_grounding, reproduction_executability, triage_accuracy
 
 # ── Sample bug description ────────────────────────────────────────────────────
@@ -56,6 +57,14 @@ initial_state: BugReproductionState = {
 }
 
 
+_STAGE_KEY = {
+    "triage": "triage",
+    "mechanics": "mechanics",
+    "reproduction": "reproduction_plan",
+    "research": "research_findings",
+}
+
+
 def _print_result(stage: str, result: dict) -> None:
     print(f"\n{'='*60}")
     print(f"=== {stage.upper()} RESULT ===")
@@ -63,7 +72,7 @@ def _print_result(stage: str, result: dict) -> None:
     print(f"  next stage      : {result.get('current_stage')}")
     print(f"  tool_calls_used : {result.get('tool_calls_used', 0)}")
 
-    key = {"triage": "triage", "mechanics": "mechanics", "reproduction": "reproduction_plan"}[stage]
+    key = _STAGE_KEY.get(stage, stage)
     data = result.get(key, {})
     if data:
         print(f"\n--- {key} ---")
@@ -168,6 +177,34 @@ async def run_all():
     _print_evals(combined)
 
 
+async def run_research_only(repro_result: dict | None = None):
+    state = {**initial_state}
+    if repro_result:
+        state = {**state, **repro_result}
+    if not state.get("triage"):
+        state["triage"] = {
+            "bug_category": "gameplay",
+            "keywords": ["fast travel", "equip", "inventory", "zone transition"],
+            "severity": "high",
+            "affected_area": "fast travel / inventory system",
+            "affected_files": [],
+            "initial_hypotheses": ["InventoryManager.reset() called during zone transition"],
+            "confidence": "medium",
+        }
+    if not state.get("mechanics"):
+        state["mechanics"] = {
+            "code_paths": [{"path": "FastTravel.execute→ZoneManager.transition→InventoryManager.reset", "description": "Equipment cleared on transition", "confidence": "medium"}],
+            "affected_components": ["FastTravelSystem", "InventoryManager", "ZoneManager"],
+            "root_cause_hypotheses": [
+                {"hypothesis": "InventoryManager.reset() drops equipped items during zone transition", "confidence": "high", "evidence": "code path ends in reset()"},
+            ],
+        }
+    print("Running research stage...", flush=True)
+    result = await research_node(state)
+    _print_result("research", result)
+    return result
+
+
 async def main():
     if STAGE == "all":
         await run_all()
@@ -175,6 +212,8 @@ async def main():
         await run_mechanics_only()
     elif STAGE == "reproduction":
         await run_reproduction_only()
+    elif STAGE == "research":
+        await run_research_only()
     else:
         await run_triage_only()
 
