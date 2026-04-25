@@ -433,6 +433,135 @@ without reading any code.
 After 9 research calls, stop and submit with what you have.
 """
 
+BUG_RESEARCH_PROMPT = """\
+## Stage: Research
+
+**Goal:** Query all configured external sources for evidence related to this bug.
+Each source is independent — if one fails or returns nothing, continue with the rest.
+
+### Your task
+
+Work through each available source group in order. Use the triage keywords,
+affected area, and top root cause hypothesis to focus every query.
+
+**1. Jira** (if `jira_search` available)
+- Search for open or recently closed issues matching the keywords and affected area
+- Fetch the 1-2 most relevant results with `jira_get_issue` + `jira_get_comments`
+- Collect: issue id, title, url, status, relevance note
+
+**2. Documentation** (if `notion_search` / `confluence_search` available)
+- Search for pages about the affected subsystem or feature
+- Fetch the body of the most relevant page with `notion_get_page` / `confluence_get_page`
+- Collect: page title, url, relevant excerpt (1-2 sentences)
+
+**3. Logs and metrics** (if `grafana_query_logs` / `kibana_search` available)
+- Query for error messages, stack traces, or anomalies matching the bug keywords
+- Use the affected area and triage keywords as search terms
+- Collect: timestamp, level, message, source
+
+**4. Network traces** (if `sniffer_parse_har` / `sniffer_find_errors` available
+   and attachments are present in state)
+- Parse any HAR files from `attachments` and extract HTTP errors
+- Collect: request url, method, status code, error detail
+
+**5. Code graph** (if repo is indexed)
+- Use `query` for semantic search over execution flows related to the affected area
+- Use `cypher` to find processes that pass through the affected components:
+  ```
+  MATCH (p:Process)-[r:CodeRelation]->(s) WHERE r.type='STEP_IN_PROCESS'
+  AND s.name IN [<affected symbols>] RETURN p.name, s.name LIMIT 20
+  ```
+- Collect: process names, relevant symbol names
+
+### Output
+Call `submit_research` with:
+- `log_entries` — list of `{timestamp, level, message, source}` (empty list if none)
+- `doc_references` — list of `{title, url, excerpt}` (empty list if none)
+- `related_issues` — list of `{id, title, url, status, relevance}` (empty list if none)
+- `network_traces` — list of `{url, method, status_code, error}` (empty list if none)
+- `code_graph_hits` — list of `{process, symbol, note}` (empty list if none)
+- `sources_queried` — list of source names you actually attempted (e.g. ["jira", "grafana"])
+- `sources_with_results` — list of source names that returned useful data
+
+### Rules
+- Skip any source whose tools are not in your available tool list — do not error
+- One source failing must not stop the others
+- Do not retry a failed tool call — note the failure and move on
+- Prefer breadth over depth: cover all sources before going deep on any one
+
+### Allowed tools
+`cypher`, `query`, `jira_search`, `jira_get_issue`, `jira_get_comments`,
+`notion_search`, `notion_get_page`, `confluence_search`, `confluence_get_page`,
+`grafana_query_logs`, `kibana_search`, `sniffer_parse_har`, `sniffer_find_errors`
+
+### Budget: 20 tool calls maximum
+After 16 research calls, stop and call `submit_research` immediately with what you have.
+"""
+
+BUG_REPORT_PROMPT = """\
+## Stage: Report Generation
+
+**Goal:** Assemble a complete, actionable bug report from all previous stage outputs.
+This is a synthesis stage — use tools only if a Jira push is needed.
+
+### Your task
+
+1. Read all stage outputs from the conversation:
+   - `triage` — bug category, severity, affected area, similar issues
+   - `mechanics` — code paths, affected components, root cause hypotheses
+   - `reproduction_plan` — steps, prerequisites, environment requirements
+   - `research_findings` — log entries, doc references, related issues, network traces
+
+2. Synthesize a `BugReport` with ALL of the following fields:
+
+   - `title` — one concise sentence describing the bug (e.g. "Fast Travel wipes equipped items via InventoryManager.reset")
+   - `severity` — from triage: critical | high | medium | low
+   - `affected_components` — list of component/module names from mechanics
+   - `root_cause` — 2-3 sentence plain-English explanation backed by the top hypothesis + evidence
+   - `reproduction_steps` — the ordered steps list from reproduction_plan (copy as-is)
+   - `prerequisites` — from reproduction_plan
+   - `environment_requirements` — from reproduction_plan
+   - `evidence` — assembled from research_findings: relevant log entries, doc refs, related issues, network traces
+   - `recommendations` — list of 2-4 concrete fix suggestions derived from the root cause hypotheses
+   - `confidence` — overall pipeline confidence:
+     * `high` — mechanics confidence high AND reproduction confidence high AND ≥1 evidence source found
+     * `medium` — at least one of mechanics/reproduction is medium, or no external evidence
+     * `low` — mechanics or reproduction confidence low, or pipeline ran with zero tools
+
+3. If `jira_ticket` is present in the initial input AND `jira_update_issue` is available:
+   - Update the existing ticket with the report summary using `jira_update_issue`
+
+   If no `jira_ticket` AND `jira_create_issue` is available AND severity is critical or high:
+   - Create a new Jira issue with `jira_create_issue` and include the returned URL in the report
+
+4. Call `submit_report` with the completed `BugReport`.
+
+### submit_report parameters
+
+- `title` — string
+- `severity` — critical | high | medium | low
+- `affected_components` — list of strings
+- `root_cause` — string (2-3 sentences)
+- `reproduction_steps` — list of `{step_number, action, expected_result}`
+- `prerequisites` — list of strings
+- `environment_requirements` — list of strings
+- `evidence` — dict with keys: `log_entries`, `doc_references`, `related_issues`, `network_traces`
+- `recommendations` — list of strings
+- `confidence` — high | medium | low
+- `jira_url` — string or null (URL of created/updated Jira issue)
+
+### Rules
+- Do not invent data — only report what came from earlier stages and research
+- If a stage output is missing or empty, note it in the relevant field rather than guessing
+- Keep `root_cause` grounded in specific evidence (file, call chain, or log entry)
+- `recommendations` must be actionable: "Add a null-check in X before calling Y", not "fix the bug"
+
+### Allowed tools
+`jira_create_issue`, `jira_update_issue`
+
+### Budget: 5 tool calls maximum
+"""
+
 # ── Backward-compatibility alias ──────────────────────────────────────────────
 # agent.py (Sprint 1) imports SYSTEM_PROMPT. Keep this alias until Dev A's
 # StateGraph rewrite merges, at which point SYSTEM_PROMPT can be removed.
