@@ -22,15 +22,18 @@ if TYPE_CHECKING:
 BUDGET = 12
 
 
-async def reproduction_node(state: "BugReproductionState", llm: Any = None) -> dict:
+async def reproduction_node(state: "BugReproductionState", llm: Any = None, client: Any = None) -> dict:
     if llm is None:
         from agent.agent import _llm
         llm = _llm
 
-    print("[bug_reproduction] starting MCP client...", flush=True)
-    client = get_mcp_client()
+    _own_client = client is None
+    if _own_client:
+        print("[bug_reproduction] starting MCP client...", flush=True)
+        client = get_mcp_client()
     all_tools = await client.get_tools()
-    print(f"[bug_reproduction] got {len(all_tools)} tools, filtering to bug_reproduction stage...", flush=True)
+    if _own_client:
+        print(f"[bug_reproduction] got {len(all_tools)} tools, filtering to bug_reproduction stage...", flush=True)
     stage_tools = safe_tools(filter_tools(all_tools, "bug_reproduction"))
 
     class _ReproductionOutput(BaseModel):
