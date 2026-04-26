@@ -41,7 +41,7 @@ def test_filter_tools_gather():
     assert "get_pull_request" in names
     assert "cypher" in names
     assert "context" not in names    # not in GATHER_TOOLS
-    assert "impact" not in names     # not in GATHER_TOOLS
+    assert "impact" in names  # in GATHER_TOOLS
     assert "submit_analysis" not in names
 
 

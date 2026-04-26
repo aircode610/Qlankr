@@ -6,7 +6,18 @@
  * - POST /analyze  (SSE: agent_step, stage_change, checkpoint, result, error)
  * - POST /analyze/{session_id}/continue (SSE: same as analyze)
  * - GET  /graph/{owner}/{repo}
+ * - POST /bug-report, /bug-report/.../continue, /bug-report/.../export, /settings/integrations
  */
+
+import type {
+  BugContinueRequest,
+  BugReportRequest,
+  BugCheckpointEvent,
+  BugReportResultEvent,
+  BugStageChangeEvent,
+  IntegrationStatus,
+  ResearchProgressEvent,
+} from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -259,4 +270,176 @@ export async function continueAnalysis(
     opts.onError?.((error as Error).message || 'Continue failed.');
     throw error;
   }
+}
+
+// ── Sprint 3: bug report + settings ─────────────────────────────
+
+export interface BugReproCallbacks {
+  signal?: AbortSignal;
+  onEvent?: (evt: SSEEvent) => void;
+  onBugStageChange?: (d: { stage: string; summary: string }) => void;
+  onBugCheckpoint?: (d: {
+    session_id: string;
+    stage_completed: string;
+    interrupt_type: string;
+    payload: Record<string, unknown>;
+  }) => void;
+  onResearchProgress?: (d: { source: string; finding_count: number; summary: string }) => void;
+  onBugResult?: (d: { session_id: string; report: unknown; agent_steps: number }) => void;
+  onError?: (message: string) => void;
+}
+
+export async function startBugReport(
+  req: BugReportRequest,
+  callbacks: BugReproCallbacks = {},
+): Promise<void> {
+  try {
+    await streamSsePost(
+      '/bug-report',
+      { ...req } as Record<string, unknown>,
+      {
+        signal: callbacks.signal,
+        onEvent: (evt) => {
+          callbacks.onEvent?.(evt);
+          if (evt.event === 'bug_stage_change') {
+            const d = evt.data as BugStageChangeEvent;
+            callbacks.onBugStageChange?.({ stage: d.stage, summary: d.summary });
+          } else if (evt.event === 'bug_checkpoint') {
+            const d = evt.data as BugCheckpointEvent;
+            callbacks.onBugCheckpoint?.({
+              session_id: d.session_id,
+              stage_completed: d.stage_completed,
+              interrupt_type: d.interrupt_type,
+              payload: d.payload,
+            });
+          } else if (evt.event === 'research_progress') {
+            const d = evt.data as ResearchProgressEvent;
+            callbacks.onResearchProgress?.({
+              source: d.source,
+              finding_count: d.finding_count,
+              summary: d.summary,
+            });
+          } else if (evt.event === 'bug_result') {
+            const d = evt.data as BugReportResultEvent;
+            callbacks.onBugResult?.({ session_id: d.session_id, report: d.report, agent_steps: d.agent_steps });
+          } else if (evt.event === 'error') {
+            const m = (evt.data as { message?: string })?.message || 'Bug run failed';
+            callbacks.onError?.(m);
+          }
+        },
+      },
+    );
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    callbacks.onError?.((error as Error).message || 'Bug run failed');
+    throw error;
+  }
+}
+
+export async function continueBugReport(
+  sessionId: string,
+  req: BugContinueRequest,
+  callbacks: BugReproCallbacks = {},
+): Promise<void> {
+  const body: Record<string, unknown> = { action: req.action };
+  if (req.feedback) body.feedback = req.feedback;
+  if (req.additional_context) body.additional_context = req.additional_context;
+  try {
+    await streamSsePost(
+      `/bug-report/${encodeURIComponent(sessionId)}/continue`,
+      body,
+      {
+        signal: callbacks.signal,
+        onEvent: (evt) => {
+          callbacks.onEvent?.(evt);
+          if (evt.event === 'bug_stage_change') {
+            const d = evt.data as BugStageChangeEvent;
+            callbacks.onBugStageChange?.({ stage: d.stage, summary: d.summary });
+          } else if (evt.event === 'bug_checkpoint') {
+            const d = evt.data as BugCheckpointEvent;
+            callbacks.onBugCheckpoint?.({
+              session_id: d.session_id,
+              stage_completed: d.stage_completed,
+              interrupt_type: d.interrupt_type,
+              payload: d.payload,
+            });
+          } else if (evt.event === 'research_progress') {
+            const d = evt.data as ResearchProgressEvent;
+            callbacks.onResearchProgress?.({
+              source: d.source,
+              finding_count: d.finding_count,
+              summary: d.summary,
+            });
+          } else if (evt.event === 'bug_result') {
+            const d = evt.data as BugReportResultEvent;
+            callbacks.onBugResult?.({ session_id: d.session_id, report: d.report, agent_steps: d.agent_steps });
+          } else if (evt.event === 'error') {
+            const m = (evt.data as { message?: string })?.message || 'Continue failed';
+            callbacks.onError?.(m);
+          }
+        },
+      },
+    );
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    callbacks.onError?.((error as Error).message || 'Continue failed');
+    throw error;
+  }
+}
+
+export async function exportBugReport(
+  sessionId: string,
+  format: 'markdown' | 'pdf',
+): Promise<Blob> {
+  const response = await fetch(
+    buildUrl(
+      `/bug-report/${encodeURIComponent(sessionId)}/export`,
+    ),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ format, push_to_jira: false }),
+    },
+  );
+  if (!response.ok) {
+    try {
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
+    } catch {
+      throw new Error(`HTTP ${response.status}`);
+    }
+  }
+  return response.blob();
+}
+
+export async function getIntegrations(): Promise<IntegrationStatus[]> {
+  const response = await fetch(buildUrl('/settings/integrations'));
+  if (!response.ok) {
+    try {
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
+    } catch {
+      throw new Error(`HTTP ${response.status}`);
+    }
+  }
+  const j = (await response.json()) as { integrations: IntegrationStatus[] };
+  return j.integrations;
+}
+
+export async function updateIntegration(
+  name: string,
+  credentials: Record<string, string>,
+): Promise<IntegrationStatus[]> {
+  const response = await fetch(buildUrl('/settings/integrations'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, credentials }),
+  });
+  if (!response.ok) {
+    try {
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
+    } catch {
+      throw new Error(`HTTP ${response.status}`);
+    }
+  }
+  const j = (await response.json()) as { integrations: IntegrationStatus[] };
+  return j.integrations;
 }

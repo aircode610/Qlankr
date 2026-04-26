@@ -110,6 +110,39 @@ _STAGE_TOOLS: dict[str, set[str]] = {
 }
 
 
+JIRA_TOOL_ALIASES: dict[str, str] = {
+    "search_issues": "jira_search",
+    "get_issue": "jira_get_issue",
+    "create_issue": "jira_create_issue",
+    "update_issue": "jira_update_issue",
+    "get_comments": "jira_get_comments",
+}
+
+
+def _normalize_tool_names(tools: list) -> list:
+    """Map community MCP tool names to canonical jira_* names for stage filters."""
+    out: list = []
+    for t in tools:
+        canonical = JIRA_TOOL_ALIASES.get(t.name, t.name)
+        if canonical == t.name:
+            out.append(t)
+            continue
+        try:
+            if hasattr(t, "model_copy"):
+                out.append(t.model_copy(update={"name": canonical}))
+            elif hasattr(t, "copy"):
+                out.append(t.copy(update={"name": canonical}))
+            else:  # pragma: no cover
+                out.append(t)
+        except Exception:
+            try:
+                t.name = canonical  # type: ignore[union-attr]
+            except Exception:
+                pass
+            out.append(t)
+    return out
+
+
 def _server_config() -> dict:
     import shutil
     utf8_env = {
@@ -131,6 +164,19 @@ def _server_config() -> dict:
             },
         },
     }
+    # Jira (Atlassian) MCP — Person 3; only if cloud credentials are present
+    if os.environ.get("JIRA_URL") and os.environ.get("JIRA_API_TOKEN"):
+        config["jira"] = {
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-atlassian"],
+            "env": {
+                **utf8_env,
+                "JIRA_URL": os.environ["JIRA_URL"],
+                "JIRA_EMAIL": os.environ.get("JIRA_EMAIL", ""),
+                "JIRA_API_TOKEN": os.environ["JIRA_API_TOKEN"],
+            },
+        }
     # Only include GitNexus if the binary is available (not present in local dev)
     if shutil.which("gitnexus"):
         config["gitnexus"] = {
@@ -186,8 +232,8 @@ def filter_tools(all_tools: list, stage: str) -> list:
     Return only the tools allowed for the given stage.
 
     Args:
-        all_tools: Full list of tools from client.get_tools().
-        stage: One of "gather", "unit", "integration", "e2e".
+        all_tools: Full list of tools from client.get_tools() (Jira names normalized first).
+        stage: One of "gather", "unit", "integration", "e2e", or bug_* names.
 
     Returns:
         Filtered list containing only tools whose names are in the stage's allowed set.
@@ -195,6 +241,7 @@ def filter_tools(all_tools: list, stage: str) -> list:
     Raises:
         KeyError: If stage is not a recognised stage name.
     """
+    all_tools = _normalize_tool_names(list(all_tools))
     allowed = _STAGE_TOOLS[stage]
     return [t for t in all_tools if t.name in allowed]
 

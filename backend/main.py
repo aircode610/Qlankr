@@ -2,16 +2,23 @@ from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from export import export_markdown, export_pdf
 from indexer import get_graph_data, index_repo
-from agent.sessions import get_session
+from agent.sessions import SessionType, get_session
+from agent.tool_health import check_all_integrations, merge_session_credentials
 from models import (
     AnalyzeRequest,
+    BugContinueRequest,
+    BugReportRequest,
     ContinueRequest,
     ErrorEvent,
+    ExportRequest,
     IndexRequest,
+    IntegrationConfigRequest,
+    IntegrationSettingsResponse,
     RunTestsRequest,
 )
 
@@ -144,6 +151,9 @@ async def analyze(req: AnalyzeRequest):
 
 @app.post("/analyze/{session_id}/continue")
 async def continue_analysis(session_id: str, req: ContinueRequest):
+    from agent.agent import has_analysis_thread  # noqa: PLC0415
+    if not has_analysis_thread(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
     async def generate():
         from agent.agent import continue_agent  # noqa: PLC0415
         user_response = {"action": req.action}
@@ -163,6 +173,111 @@ async def analyze_session_status(session_id: str):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return session.to_status_dict()
+
+
+# ── Sprint 3: bug reproduction + settings + export ───────────────────────────
+
+
+@app.post("/bug-report")
+async def create_bug_report(req: BugReportRequest):
+    async def generate():
+        from agent.bug_agent import run_bug_report  # noqa: PLC0415
+        async for event in run_bug_report(
+            description=req.description,
+            environment=req.environment,
+            severity=req.severity,
+            repo_url=req.repo_url,
+            jira_ticket=req.jira_ticket,
+            attachments=req.attachments,
+        ):
+            yield sse_event(event)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.post("/bug-report/{session_id}/continue")
+async def continue_bug_report_ep(session_id: str, req: BugContinueRequest):
+    async def generate():
+        from agent.bug_agent import continue_bug_report  # noqa: PLC0415
+        user_response: dict[str, Any] = {"action": req.action}
+        if req.feedback:
+            user_response["feedback"] = req.feedback
+        if req.additional_context:
+            user_response["additional_context"] = req.additional_context
+            user_response["context"] = req.additional_context
+        async for event in continue_bug_report(session_id, user_response):
+            yield sse_event(event)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+@app.get("/bug-report/{session_id}/status")
+async def bug_report_status(session_id: str):
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.session_type != SessionType.BUG_REPRODUCTION:
+        raise HTTPException(status_code=400, detail="Not a bug reproduction session")
+    return session.to_status_dict()
+
+
+@app.post("/bug-report/{session_id}/export")
+async def export_bug_report_ep(session_id: str, req: ExportRequest):
+    from models import BugReport  # noqa: PLC0415
+
+    session = get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.session_type != SessionType.BUG_REPRODUCTION:
+        raise HTTPException(status_code=400, detail="Not a bug reproduction session")
+    if session.bug_report is None:
+        raise HTTPException(
+            status_code=400, detail="Bug report not ready — complete the pipeline first."
+        )
+    br = (
+        session.bug_report
+        if isinstance(session.bug_report, BugReport)
+        else BugReport.model_validate(session.bug_report)
+    )
+    if req.push_to_jira:
+        # Jira create/update is implemented in the research/report stages; export stays local.
+        pass
+    if req.format == "markdown":
+        content, filename = export_markdown(br)
+        return Response(
+            content=content.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    raw, filename = export_pdf(br)
+    body = raw if isinstance(raw, (bytes, bytearray)) else bytes(raw)
+    return Response(
+        content=body,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/settings/integrations")
+async def get_integrations():
+    from models import IntegrationStatus  # noqa: PLC0415
+
+    raw = await check_all_integrations()
+    return IntegrationSettingsResponse(
+        integrations=[IntegrationStatus.model_validate(x) for x in raw]
+    )
+
+
+@app.post("/settings/integrations")
+async def update_integration(req: IntegrationConfigRequest):
+    merge_session_credentials(req.name, dict(req.credentials or {}))
+    from models import IntegrationStatus  # noqa: PLC0415
+
+    raw = await check_all_integrations()
+    return {
+        "ok": True,
+        "integrations": [IntegrationStatus.model_validate(x) for x in raw],
+    }
 
 
 @app.post("/run-tests")

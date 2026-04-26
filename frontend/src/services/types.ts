@@ -134,4 +134,112 @@ export type SSEEventType =
   | 'result'
   | 'error'
   | 'test_result'
-  | 'test_run_done';
+  | 'test_run_done'
+  | 'bug_stage_change'
+  | 'bug_checkpoint'
+  | 'research_progress'
+  | 'bug_result'
+  | 'export_ready';
+
+// ── Sprint 3 bug + integrations (mirrors Pydantic models) ──────────────────
+
+export type BugSeverity = 'critical' | 'major' | 'minor' | 'trivial';
+export type Confidence3 = 'high' | 'medium' | 'low';
+
+export interface BugReportRequest {
+  description: string;
+  environment?: string;
+  severity?: BugSeverity;
+  repo_url?: string;
+  jira_ticket?: string;
+  attachments?: string[];
+  session_id?: string;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+  source: string;
+  labels: Record<string, unknown>;
+}
+
+export interface DocReference {
+  title: string;
+  url: string;
+  source: string;
+  snippet: string;
+}
+
+export interface RelatedIssue {
+  key: string;
+  summary: string;
+  status: string;
+  url: string;
+}
+
+export interface ResearchFindings {
+  log_entries: LogEntry[];
+  doc_references: DocReference[];
+  related_issues: RelatedIssue[];
+  db_state: Record<string, unknown>[];
+  admin_notes: string[];
+  evidence_summary: string;
+}
+
+export interface BugReport {
+  title: string;
+  severity: BugSeverity;
+  category: string;
+  environment: string;
+  reproduction_steps: E2ETestStep[];
+  expected_behavior: string;
+  actual_behavior: string;
+  root_cause_analysis: string;
+  affected_components: AffectedComponent[];
+  evidence: ResearchFindings;
+  recommendations: string[];
+  confidence: Confidence3;
+  jira_url?: string;
+}
+
+export interface BugContinueRequest {
+  action: 'approve' | 'refine' | 'add_context';
+  feedback?: string;
+  additional_context?: string;
+}
+
+export interface BugStageChangeEvent {
+  type: 'bug_stage_change';
+  stage: string;
+  summary: string;
+}
+
+export interface BugCheckpointEvent {
+  type: 'bug_checkpoint';
+  session_id: string;
+  stage_completed: string;
+  interrupt_type: string;
+  payload: Record<string, unknown>;
+}
+
+export interface ResearchProgressEvent {
+  type: 'research_progress';
+  source: string;
+  finding_count: number;
+  summary: string;
+}
+
+export interface BugReportResultEvent {
+  type: 'bug_result';
+  session_id: string;
+  report: BugReport;
+  agent_steps: number;
+}
+
+export interface IntegrationStatus {
+  name: string;
+  configured: boolean;
+  healthy: boolean;
+  message: string;
+}

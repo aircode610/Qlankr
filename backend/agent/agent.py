@@ -277,6 +277,11 @@ def _get_graph():
 
 _sessions: dict[str, dict] = {}
 
+
+def has_analysis_thread(session_id: str) -> bool:
+    """True if a PR analysis run was started for this id (in-memory, same as checkpointer thread)."""
+    return session_id in _sessions
+
 # ── Stage node names (for StageChangeEvent filtering) ────────────────────────
 
 _STAGE_NODES = {
@@ -288,7 +293,12 @@ _llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     temperature=0,
     max_tokens=4096,
-    api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
+    # Placeholder allows import in CI / tests; real calls still need a valid key in env.
+    api_key=(
+        os.environ.get("ANTHROPIC_AUTH_TOKEN")
+        or os.environ.get("ANTHROPIC_API_KEY")
+        or "dummy-not-configured"
+    ),
     base_url=os.environ.get("ANTHROPIC_BASE_URL"),
 )
 

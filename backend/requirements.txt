@@ -8,6 +8,7 @@ pydantic>=2.0.0
 python-dotenv>=1.0.0
 langsmith>=0.1.0
 docker>=7.1.0
+fpdf2>=2.7.0
 
 # Dev / test
 pytest>=8.0
