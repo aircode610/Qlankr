@@ -17,6 +17,13 @@ import json
 import sys
 from pathlib import Path
 
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+
+def load_fixture(name: str) -> dict:
+    """Load a bug example fixture by filename stem (e.g. 'openttd_timetable_crash')."""
+    return json.loads((FIXTURES_DIR / f"{name}.json").read_text())
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from dotenv import load_dotenv
@@ -36,23 +43,20 @@ from evals.bug_evaluators import (
 
 # ── Sample bug description ────────────────────────────────────────────────────
 
-BUG_DESCRIPTION = """\
-After disabling "Show arrival and departure date on timetable" in Settings → Interface → \
-Timetable settings, opening any vehicle's timetable window causes an immediate crash with \
-assertion failure: "cur_height < max_smallest" at widget.cpp line 1578 inside \
-NWidgetHorizontal::SetupSmallestSize(). Reproducible 100% on a fresh game with no mods. \
-Reverting the setting prevents the crash.
-"""
+# Override with a different fixture name via: python -m tests.agent.test_bug_reproduction pipeline openttd_timetable_crash
+_fixture_name = sys.argv[2] if len(sys.argv) > 2 else "openttd_timetable_crash"
+_fixture = load_fixture(_fixture_name)
 
+BUG_DESCRIPTION = _fixture["description"]
 MODE = sys.argv[1] if len(sys.argv) > 1 else "pipeline"
 
 initial_state: BugReproductionState = {
     "description": BUG_DESCRIPTION,
-    "environment": "Windows 11, openttd-15.0-beta3",
-    "severity_input": "high",
-    "repo_name": "OpenTTD",
-    "jira_ticket": None,
-    "attachments": [],
+    "environment": _fixture.get("environment", "unspecified"),
+    "severity_input": _fixture.get("severity_input", "medium"),
+    "repo_name": _fixture.get("repo_name"),
+    "jira_ticket": _fixture.get("jira_ticket"),
+    "attachments": _fixture.get("attachments", []),
     "session_id": "test-bug-stages",
     "repo_stats": {},
     "processes": [],
@@ -147,9 +151,9 @@ async def run_pipeline():
     # Start pipeline
     result = await _stream(run_bug_agent(
         description=BUG_DESCRIPTION,
-        environment="Windows 11, openttd-15.0-beta3",
-        severity_input="high",
-        repo_name="OpenTTD",
+        environment=_fixture.get("environment", "unspecified"),
+        severity_input=_fixture.get("severity_input", "medium"),
+        repo_name=_fixture.get("repo_name"),
         session_id=session_id,
     ))
 
