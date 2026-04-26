@@ -11,9 +11,11 @@ Budget: 15 tool calls.
 """
 
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, INTEGRATION_PROMPT
@@ -73,29 +75,59 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
         else ""
     )
 
+    _saver = MemorySaver()
+    _thread = f"{state.get('session_id', state.get('pr_url', 'anon'))}-integration-{uuid4().hex[:8]}"
+    _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 40}
+
+    human_message = HumanMessage(content=(
+        f"{diff_section}"
+        f"Affected components:\n{components_block}\n\n"
+        f"{repo_clause}\n\n"
+        "Use impact/context/query/cypher to find cross-module integration points. "
+        "When done, call submit_integration_tests with all specs at once."
+    ))
+
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}"),
+        checkpointer=_saver,
     )
 
     tool_call_count = 0
     async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=(
-            f"{diff_section}"
-            f"Affected components:\n{components_block}\n\n"
-            f"{repo_clause}\n\n"
-            "Use impact/context/query/cypher to find cross-module integration points. "
-            "When done, call submit_integration_tests with all specs at once."
-        ))]},
+        {"messages": [human_message]},
         version="v2",
-        config={"recursion_limit": 40},
+        config=_stage_config,
     ):
-        if event["event"] == "on_tool_start":
+        event_type = event["event"]
+        if event_type == "on_tool_start":
             tool_call_count += 1
             print(f"  [integration {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
             if event["name"] != "submit_integration_tests" and tool_call_count >= BUDGET:
                 break
+        elif event_type == "on_tool_end" and event.get("name") == "submit_integration_tests":
+            break
+
+    if not integration_results:
+        print(f"  [integration] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
+        agent_state = await agent.aget_state(_stage_config)
+        accumulated = agent_state.values.get("messages", [])
+        submit_agent = create_react_agent(
+            model=llm,
+            tools=[submit_tool],
+            prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}"),
+        )
+        async for _ in submit_agent.astream_events(
+            {"messages": accumulated + [HumanMessage(content=(
+                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
+                "Call submit_integration_tests NOW with all integration points found. "
+                "Use risk_level='LOW' for any specs with incomplete evidence."
+            ))]},
+            version="v2",
+            config={"recursion_limit": 5},
+        ):
+            pass
 
     # Distribute integration specs back into affected_components by module name matching
     updated = []

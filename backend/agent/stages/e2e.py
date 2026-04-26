@@ -11,9 +11,11 @@ Budget: 20 tool calls.
 """
 
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
@@ -78,31 +80,61 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     affected_files = [f for c in components for f in c.get("files_changed", [])]
     files_clause = f"Changed files: {', '.join(affected_files[:20])}" if affected_files else ""
 
+    _saver = MemorySaver()
+    _thread = f"{state.get('session_id', state.get('pr_url', 'anon'))}-e2e-{uuid4().hex[:8]}"
+    _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 50}
+
+    human_message = HumanMessage(content=(
+        f"{processes_clause}\n"
+        f"{files_clause}\n"
+        f"{repo_clause}"
+        f"{context_clause}\n\n"
+        "Identify which processes are affected by these file changes, "
+        "fetch their details, and generate E2E test plans. "
+        "Call submit_e2e_plans with all plans when done."
+    ))
+
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
+        checkpointer=_saver,
     )
 
     tool_call_count = 0
     async for event in agent.astream_events(
-        {"messages": [HumanMessage(content=(
-            f"{processes_clause}\n"
-            f"{files_clause}\n"
-            f"{repo_clause}"
-            f"{context_clause}\n\n"
-            "Identify which processes are affected by these file changes, "
-            "fetch their details, and generate E2E test plans. "
-            "Call submit_e2e_plans with all plans when done."
-        ))]},
+        {"messages": [human_message]},
         version="v2",
-        config={"recursion_limit": 50},
+        config=_stage_config,
     ):
-        if event["event"] == "on_tool_start":
+        event_type = event["event"]
+        if event_type == "on_tool_start":
             tool_call_count += 1
             print(f"  [e2e {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
             if event["name"] != "submit_e2e_plans" and tool_call_count >= BUDGET:
                 break
+        elif event_type == "on_tool_end" and event.get("name") == "submit_e2e_plans":
+            break
+
+    if not e2e_results:
+        print(f"  [e2e] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
+        agent_state = await agent.aget_state(_stage_config)
+        accumulated = agent_state.values.get("messages", [])
+        submit_agent = create_react_agent(
+            model=llm,
+            tools=[submit_tool],
+            prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
+        )
+        async for _ in submit_agent.astream_events(
+            {"messages": accumulated + [HumanMessage(content=(
+                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
+                "Call submit_e2e_plans NOW with all E2E test plans from your analysis. "
+                "Use priority='LOW' for any plans with incomplete process details."
+            ))]},
+            version="v2",
+            config={"recursion_limit": 5},
+        ):
+            pass
 
     return {
         "tool_calls_used": state.get("tool_calls_used", 0) + tool_call_count,

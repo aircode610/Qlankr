@@ -293,6 +293,52 @@ GITHUB_ONLY_EXAMPLES = [
 ]
 
 
+# ── Dataset 3: Bug reproduction examples (Sprint 3) ──────────────────────────
+# Each example has a real bug description + ground truth root cause, affected
+# files, and components so evaluators can measure pipeline accuracy.
+
+BUG_EXAMPLES = [
+    # ── OpenTTD: UI crash — timetable widget layout assertion ─────────────────
+    {
+        "_category": "UI crash — widget layout assertion",
+        "inputs": {
+            "description": (
+                'After disabling "Show arrival and departure date on timetable" in '
+                "Settings → Interface → Timetable settings, opening any vehicle's "
+                'timetable window causes an immediate crash with assertion failure: '
+                '"cur_height < max_smallest" at widget.cpp line 1578 inside '
+                "NWidgetHorizontal::SetupSmallestSize(). Reproducible 100% on a "
+                "fresh game with no mods. Reverting the setting prevents the crash."
+            ),
+            "environment": "Windows 11, openttd-15.0-beta3",
+            "severity_input": "high",
+            "repo_name": "OpenTTD",
+        },
+        "outputs": {
+            "expected_root_cause_keywords": [
+                "fallthrough",
+                "UpdateWidgetSize",
+                "UpdateSelectionStates",
+                "FinishInitNested",
+                "SetDisplayedPlane",
+            ],
+            "expected_affected_files": [
+                "src/timetable_gui.cpp",
+                "src/widget.cpp",
+            ],
+            "expected_affected_components": [
+                "TimetableWindow",
+                "NWidgetHorizontal",
+                "UpdateSelectionStates",
+            ],
+            "expected_severity": "high",
+            "expected_category": "crash",
+            "min_reproduction_steps": 3,
+        },
+    },
+]
+
+
 if __name__ == "__main__":
     print("Creating LangSmith datasets...")
     _upsert_dataset(
@@ -304,5 +350,10 @@ if __name__ == "__main__":
         "qlankr-eval-github",
         "External repo PRs without indexing — tests GitHub-only fallback path",
         GITHUB_ONLY_EXAMPLES,
+    )
+    _upsert_dataset(
+        "qlankr-eval-bugs",
+        "Bug descriptions with ground truth root cause — tests Sprint 3 bug reproduction pipeline",
+        BUG_EXAMPLES,
     )
     print("Done.")

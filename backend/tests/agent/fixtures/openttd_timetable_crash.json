@@ -1,0 +1,28 @@
+{
+  "id": "openttd_timetable_crash",
+  "description": "After disabling \"Show arrival and departure date on timetable\" in Settings → Interface → Timetable settings, opening any vehicle's timetable window causes an immediate crash with assertion failure: \"cur_height < max_smallest\" at widget.cpp line 1578 inside NWidgetHorizontal::SetupSmallestSize(). Reproducible 100% on a fresh game with no mods. Reverting the setting prevents the crash.",
+  "environment": "Windows 11, openttd-15.0-beta3",
+  "severity_input": "high",
+  "repo_name": "OpenTTD",
+  "jira_ticket": null,
+  "attachments": [],
+  "ground_truth": {
+    "root_cause": "Two cooperating bugs: (1) UpdateWidgetSize() uses [[fallthrough]] from WID_VT_ARRIVAL_DEPARTURE_PANEL into WID_VT_TIMETABLE_PANEL, unconditionally assigning an 8-row height to the arrival/departure panel regardless of its visibility. (2) The TimetableWindow constructor calls UpdateSelectionStates() — which hides the arrival/departure panel via SetDisplayedPlane(SZSP_NONE) — before FinishInitNested() runs. The hidden stacked container reports zero height while its child retains the pre-computed large height, violating the cur_height < max_smallest invariant in NWidgetHorizontal::SetupSmallestSize() at widget.cpp:1578.",
+    "affected_files": [
+      "src/timetable_gui.cpp",
+      "src/widgets/timetable_widget.h",
+      "src/widget.cpp"
+    ],
+    "affected_components": [
+      "TimetableWindow",
+      "UpdateSelectionStates",
+      "UpdateWidgetSize",
+      "NWidgetStacked",
+      "NWidgetHorizontal"
+    ],
+    "severity": "high",
+    "category": "crash",
+    "fix_hint": "Either remove the [[fallthrough]] in UpdateWidgetSize() and guard height assignment on setting value, or move the UpdateSelectionStates() call to after FinishInitNested() in the constructor.",
+    "reproduction_trigger": "Disable 'Show arrival and departure date on timetable' setting, then open any vehicle's timetable window"
+  }
+}
