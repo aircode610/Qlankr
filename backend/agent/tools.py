@@ -51,7 +51,6 @@ BUG_TRIAGE_TOOLS: set[str] = {
     "jira_get_issue",
     "jira_get_comments",
     "search_code",
-    "get_file_contents",
     "cypher",
     "impact",
     "list_repos",
@@ -61,9 +60,9 @@ BUG_MECHANICS_TOOLS: set[str] = {
     "get_file_contents",
     "search_code",
     "cypher",
+    "query",
     "context",
     "impact",
-    "detect_changes",
     "list_directory",
 }
 
@@ -79,6 +78,7 @@ BUG_REPRODUCTION_TOOLS: set[str] = {
 
 BUG_RESEARCH_TOOLS: set[str] = {
     "cypher",
+    "query",
     "jira_search",
     "jira_get_issue",
     "jira_get_comments",
@@ -225,6 +225,88 @@ def safe_tools(tools: list) -> list:
 
         wrapped.append(tool.copy(update={"coroutine": _safe, "func": None}))
     return wrapped
+
+
+_TOOL_OUTPUT_MAX_CHARS = 12_000  # ~3k tokens per tool result
+
+# Keep the old name as an alias so existing call sites don't break
+_FILE_TOOL_MAX_CHARS = _TOOL_OUTPUT_MAX_CHARS
+
+
+def make_messages_modifier(max_chars: int = _TOOL_OUTPUT_MAX_CHARS):
+    """
+    Return a pre_model_hook for create_react_agent that caps every ToolMessage
+    content at max_chars before it reaches the LLM.
+
+    This runs inside the agent executor right before each LLM call, so it prevents
+    large tool outputs from bloating the context window across the entire stage.
+    Handles both plain-string and list-of-blocks ToolMessage formats.
+
+    Usage: create_react_agent(..., pre_model_hook=make_messages_modifier())
+    """
+    from langchain_core.messages import ToolMessage
+
+    def _hook(state: dict) -> dict:
+        messages = state.get("messages", [])
+        updated = []
+        any_changed = False
+        for msg in messages:
+            if not isinstance(msg, ToolMessage):
+                updated.append(msg)
+                continue
+            content = msg.content
+            if isinstance(content, str) and len(content) > max_chars:
+                content = content[:max_chars] + f"\n...[output truncated — {len(content) - max_chars} chars omitted]"
+                msg = msg.copy(update={"content": content})
+                any_changed = True
+            elif isinstance(content, list):
+                new_blocks = []
+                changed = False
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = block.get("text", "")
+                        if len(text) > max_chars:
+                            block = {**block, "text": text[:max_chars] + f"\n...[output truncated — {len(text) - max_chars} chars omitted]"}
+                            changed = True
+                    new_blocks.append(block)
+                if changed:
+                    msg = msg.copy(update={"content": new_blocks})
+                    any_changed = True
+            updated.append(msg)
+        return {"messages": updated} if any_changed else {}
+
+    return _hook
+
+
+def fix_dangling_tool_calls(messages: list) -> list:
+    """
+    After a budget break the last AIMessage may contain tool_calls that never
+    executed (common when the agent issues parallel tool calls and we break
+    mid-stream).  Without matching ToolMessages the chat history is invalid and
+    most LLM providers reject it.
+
+    Appends a synthetic ToolMessage for every unmatched tool_call_id so the
+    history is well-formed before passing it to the forced-submit agent.
+    """
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    tool_message_ids = {msg.tool_call_id for msg in messages if isinstance(msg, ToolMessage)}
+    fixed = []
+    for msg in messages:
+        fixed.append(msg)
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                if tc["id"] not in tool_message_ids:
+                    fixed.append(ToolMessage(
+                        content="[Interrupted: budget limit reached before this tool call completed]",
+                        tool_call_id=tc["id"],
+                    ))
+    return fixed
+
+
+def truncate_large_tools(tools: list, max_chars: int = _TOOL_OUTPUT_MAX_CHARS) -> list:
+    """Kept for backwards compatibility — prefer make_messages_modifier instead."""
+    return tools
 
 
 def filter_tools(all_tools: list, stage: str) -> list:
