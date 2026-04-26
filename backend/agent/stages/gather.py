@@ -97,11 +97,14 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
         version="v2",
         config=_stage_config,
     ):
-        if event["event"] == "on_tool_start":
+        event_type = event["event"]
+        if event_type == "on_tool_start":
             tool_call_count += 1
             print(f"  [{tool_call_count}/{BUDGET}] {event['name']}", flush=True)
             if event["name"] != "submit_gather" and tool_call_count >= BUDGET:
                 break
+        elif event_type == "on_tool_end" and event.get("name") == "submit_gather":
+            break
 
     base_count = state.get("tool_calls_used", 0)
     if not results:

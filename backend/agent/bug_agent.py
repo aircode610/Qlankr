@@ -36,10 +36,20 @@ class BugResultEvent(BaseModel):
     full_state: dict = Field(default_factory=dict)
 
 
-# ── LLM singleton ─────────────────────────────────────────────────────────────
+# ── LLM singletons ────────────────────────────────────────────────────────────
+# Heavy stages (mechanics, reproduction, research) need Sonnet for deep reasoning.
+# Light stages (triage = classification, report = synthesis) run on Haiku (~37x cheaper).
 
 _llm = ChatAnthropic(
     model="claude-sonnet-4-6",
+    temperature=0,
+    max_tokens=4096,
+    api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
+    base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+)
+
+_llm_light = ChatAnthropic(
+    model="claude-haiku-4-5-20251001",
     temperature=0,
     max_tokens=4096,
     api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
@@ -64,7 +74,7 @@ TIMEOUT_SECONDS = 600
 
 async def _triage_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_triage import triage_node
-    return await triage_node(state, _llm, _run_clients.get(state["session_id"]))
+    return await triage_node(state, _llm_light, _run_clients.get(state["session_id"]))
 
 
 async def _mechanics_node(state: BugReproductionState) -> dict:
@@ -160,7 +170,7 @@ def _checkpoint_research_node(state: BugReproductionState) -> dict:
 
 async def _report_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_report import report_node
-    return await report_node(state, _llm, _run_clients.get(state["session_id"]))
+    return await report_node(state, _llm_light, _run_clients.get(state["session_id"]))
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────

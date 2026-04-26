@@ -328,7 +328,7 @@ and locate the relevant area of the codebase.
 
 ### Allowed tools
 `jira_search`, `jira_get_issue`, `jira_get_comments`, `search_code`, \
-`get_file_contents`, `cypher`, `impact`, `list_repos`
+`cypher`, `impact`, `list_repos`
 
 ### Budget: 8 tool calls maximum
 If you reach the budget before calling submit_triage, call it immediately with what you have.

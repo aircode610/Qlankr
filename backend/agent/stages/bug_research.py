@@ -17,7 +17,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BUG_BASE_PROMPT, BUG_RESEARCH_PROMPT
-from agent.tools import filter_tools, get_mcp_client, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import BugReproductionState
@@ -164,6 +164,7 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_RESEARCH_PROMPT}"),
         checkpointer=_saver,
+        pre_model_hook=make_messages_modifier(),
     )
 
     tool_call_count = 0
@@ -172,22 +173,26 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
         version="v2",
         config=_stage_config,
     ):
-        if event["event"] == "on_tool_start":
+        event_type = event["event"]
+        if event_type == "on_tool_start":
             tool_call_count += 1
             tool_name = event["name"]
             print(f"  [{tool_call_count}/{BUDGET}] {tool_name}", flush=True)
             if tool_name != "submit_research" and tool_call_count >= BUDGET:
                 break
+        elif event_type == "on_tool_end" and event.get("name") == "submit_research":
+            break
 
     base_count = state.get("tool_calls_used", 0)
     if not results:
         print(f"  [research] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
         agent_state = await agent.aget_state(_stage_config)
-        accumulated = agent_state.values.get("messages", [])
+        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
         submit_agent = create_react_agent(
             model=llm,
             tools=[submit_tool],
             prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_RESEARCH_PROMPT}"),
+            pre_model_hook=make_messages_modifier(),
         )
         async for _ in submit_agent.astream_events(
             {"messages": accumulated + [HumanMessage(content=(
@@ -196,7 +201,7 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
                 "Use empty lists for sources you didn't reach."
             ))]},
             version="v2",
-            config={"recursion_limit": 5},
+            config={"recursion_limit": 10},
         ):
             pass
 
