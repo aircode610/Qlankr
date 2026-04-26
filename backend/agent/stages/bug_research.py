@@ -8,9 +8,11 @@ Budget: 20 tool calls.
 """
 
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
@@ -142,17 +144,22 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
         context_clause,
     ]))
 
+    _saver = MemorySaver()
+    _thread = f"{state.get('session_id', 'anon')}-research-{uuid4().hex[:8]}"
+    _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 50}
+
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_RESEARCH_PROMPT}"),
+        checkpointer=_saver,
     )
 
     tool_call_count = 0
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=human_content)]},
         version="v2",
-        config={"recursion_limit": 50},
+        config=_stage_config,
     ):
         if event["event"] == "on_tool_start":
             tool_call_count += 1
@@ -162,6 +169,26 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
                 break
 
     base_count = state.get("tool_calls_used", 0)
+    if not results:
+        print(f"  [research] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
+        agent_state = await agent.aget_state(_stage_config)
+        accumulated = agent_state.values.get("messages", [])
+        submit_agent = create_react_agent(
+            model=llm,
+            tools=[submit_tool],
+            prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_RESEARCH_PROMPT}"),
+        )
+        async for _ in submit_agent.astream_events(
+            {"messages": accumulated + [HumanMessage(content=(
+                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
+                "Call submit_research NOW with all findings gathered so far. "
+                "Use empty lists for sources you didn't reach."
+            ))]},
+            version="v2",
+            config={"recursion_limit": 5},
+        ):
+            pass
+
     if not results:
         return {
             "current_stage": "report_generation",

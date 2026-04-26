@@ -8,9 +8,11 @@ Budget: 5 tool calls.
 
 import json
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
@@ -134,17 +136,22 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
         jira_clause,
     ])
 
+    _saver = MemorySaver()
+    _thread = f"{state.get('session_id', 'anon')}-report-{uuid4().hex[:8]}"
+    _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 20}
+
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_REPORT_PROMPT}"),
+        checkpointer=_saver,
     )
 
     tool_call_count = 0
     async for event in agent.astream_events(
         {"messages": [HumanMessage(content=human_content)]},
         version="v2",
-        config={"recursion_limit": 20},
+        config=_stage_config,
     ):
         if event["event"] == "on_tool_start":
             tool_call_count += 1
@@ -153,6 +160,26 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
                 break
 
     base_count = state.get("tool_calls_used", 0)
+    if not results:
+        print(f"  [report] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
+        agent_state = await agent.aget_state(_stage_config)
+        accumulated = agent_state.values.get("messages", [])
+        submit_agent = create_react_agent(
+            model=llm,
+            tools=[submit_tool],
+            prompt=SystemMessage(content=f"{BUG_BASE_PROMPT}\n\n{BUG_REPORT_PROMPT}"),
+        )
+        async for _ in submit_agent.astream_events(
+            {"messages": accumulated + [HumanMessage(content=(
+                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
+                "Call submit_report NOW with a complete bug report. "
+                "Use confidence='low' and note any missing data."
+            ))]},
+            version="v2",
+            config={"recursion_limit": 5},
+        ):
+            pass
+
     if not results:
         return {
             "current_stage": "done",
