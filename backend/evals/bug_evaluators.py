@@ -330,27 +330,36 @@ def report_actionability(outputs: dict) -> dict:
 
 def evidence_quality(outputs: dict) -> dict:
     """
-    Checks whether the bug report contains substantive evidence across categories.
-    Score = fraction of evidence categories that contain at least one entry.
+    Checks whether evidence was gathered across categories.
+    External categories (from bug_report.evidence): log_entries, doc_references,
+    related_issues, network_traces.
+    Internal category (from research_findings): code_graph_hits.
+    Score = fraction of all 5 categories that contain at least one entry.
     """
     report = outputs.get("bug_report", {})
     if not report:
         return {"key": "evidence_quality", "score": 0.0, "comment": "bug_report missing", "details": []}
 
     evidence = report.get("evidence", {})
-    if not evidence:
-        return {"key": "evidence_quality", "score": 0.0, "comment": "evidence field missing from report", "details": []}
+    research = outputs.get("research_findings", {})
 
-    categories = ["log_entries", "doc_references", "related_issues", "network_traces"]
-
+    external_categories = ["log_entries", "doc_references", "related_issues", "network_traces"]
     details = [
         {
             "check": f"{cat} non-empty",
             "passed": len(evidence.get(cat, [])) >= 1,
             "value": f"{len(evidence.get(cat, []))} item(s)",
         }
-        for cat in categories
+        for cat in external_categories
     ]
+
+    # Code graph hits live in research_findings, not bug_report.evidence
+    code_graph_hits = research.get("code_graph_hits", [])
+    details.append({
+        "check": "code_graph_hits non-empty",
+        "passed": len(code_graph_hits) >= 1,
+        "value": f"{len(code_graph_hits)} hit(s)",
+    })
 
     filled = [d for d in details if d["passed"]]
     score = len(filled) / len(details)

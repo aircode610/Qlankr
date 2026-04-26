@@ -102,12 +102,20 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
     affected_components = mechanics.get("affected_components", [])
 
     repo_name = state.get("repo_name")
-    repo_clause = (
-        f'Repo "{repo_name}" is indexed in GitNexus. '
-        f"Use `query` and `cypher` to find processes and symbols in the affected area."
-        if repo_name
-        else "No indexed repo — skip GitNexus tools."
-    )
+    # If mechanics already queried the code graph, steer research toward external sources only
+    if mechanics.get("code_paths"):
+        code_graph_clause = (
+            "Code graph was already queried extensively during mechanics analysis. "
+            "Do NOT use cypher or query tools — focus exclusively on external sources "
+            "(Jira, logs, documentation, network traces)."
+        )
+    elif repo_name:
+        code_graph_clause = (
+            f'Repo "{repo_name}" is indexed in GitNexus. '
+            "Use `query` and `cypher` to find processes and symbols in the affected area."
+        )
+    else:
+        code_graph_clause = "No indexed repo — skip GitNexus tools."
 
     attachments = state.get("attachments", [])
     attachment_clause = (
@@ -124,10 +132,13 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
     )
 
     available_sources = _available_sources(available_tool_names)
+    # Exclude code graph from listed sources if mechanics already covered it
+    if mechanics.get("code_paths") and "code graph" in available_sources:
+        available_sources = [s for s in available_sources if s != "code graph"]
     sources_clause = (
         f"Available sources for this run: {', '.join(available_sources)}"
         if available_sources
-        else "No external sources are configured — use code graph only."
+        else "No external sources are configured — call submit_research immediately with empty lists."
     )
 
     human_content = "\n".join(filter(None, [
@@ -138,7 +149,7 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
         f"Keywords: {', '.join(keywords) if keywords else 'none'}",
         f"Affected components: {', '.join(affected_components) if affected_components else 'none'}",
         f"Top hypothesis: {top_hypothesis}" if top_hypothesis else "",
-        repo_clause,
+        code_graph_clause,
         attachment_clause,
         sources_clause,
         context_clause,

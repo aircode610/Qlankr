@@ -170,9 +170,8 @@ async def run_pipeline():
         print("=== FINAL BUG REPORT ===")
         print(f"{'='*60}")
         print(json.dumps(result.bug_report, indent=2))
-        combined = {**result.bug_report, "bug_report": result.bug_report}
-        # Flatten for evaluators
-        combined["tool_calls_used"] = result.bug_report.get("tool_calls_used", 0)
+        # Use full_state so evaluators can access triage/mechanics/reproduction_plan/research_findings
+        combined = result.full_state if result.full_state else {"bug_report": result.bug_report}
     else:
         print("\nPipeline did not produce a result.")
         return

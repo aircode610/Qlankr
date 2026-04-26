@@ -21,7 +21,7 @@ from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agent.agent import BugReproductionState
 from models import AgentStepEvent, CheckpointEvent, ErrorEvent, StageChangeEvent
@@ -33,6 +33,7 @@ class BugResultEvent(BaseModel):
     type: Literal["bug_result"] = "bug_result"
     session_id: str
     bug_report: dict
+    full_state: dict = Field(default_factory=dict)
 
 
 # ── LLM singleton ─────────────────────────────────────────────────────────────
@@ -109,7 +110,9 @@ def _checkpoint_mechanics_node(state: BugReproductionState) -> dict:
 
 async def _reproduction_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_reproduction import reproduction_node
-    return await reproduction_node(state, _llm, _run_clients.get(state["session_id"]))
+    client = _run_clients.get(state["session_id"])
+    print(f"[_reproduction_node] session_id={state['session_id']!r} client_present={client is not None}", flush=True)
+    return await reproduction_node(state, _llm, client)
 
 
 async def _research_node(state: BugReproductionState) -> dict:
@@ -328,7 +331,7 @@ async def _start_bug_graph(
         "research_context": None,
     }
 
-    _bug_sessions[thread_id] = {"description": description, "repo_name": repo_name}
+    _bug_sessions[thread_id] = {"description": description, "repo_name": repo_name, "emitted_stages": set()}
 
     from agent.tools import get_mcp_client
     print("[bug_agent] starting shared MCP client...", flush=True)
@@ -370,7 +373,9 @@ async def _stream_bug_graph(
     thread_id: str,
 ) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
     """Drive the bug graph, mapping LangGraph events to SSE events."""
-    emitted_stages: set[str] = set()
+    # Load emitted_stages from session so resume calls don't re-emit already-seen stages (Bug #3)
+    session = _bug_sessions.get(thread_id, {})
+    emitted_stages: set[str] = session.get("emitted_stages", set())
 
     async for event in graph.astream_events(input_or_command, version="v2", config=config):
         event_type = event["event"]
@@ -379,6 +384,8 @@ async def _stream_bug_graph(
         if event_type == "on_chain_start" and node_name in _BUG_STAGE_NODES:
             if node_name not in emitted_stages:
                 emitted_stages.add(node_name)
+                if thread_id in _bug_sessions:
+                    _bug_sessions[thread_id]["emitted_stages"] = emitted_stages
                 yield StageChangeEvent(
                     stage=node_name,
                     summary=f"Starting {node_name.replace('_', ' ')}",
@@ -401,7 +408,9 @@ async def _stream_bug_graph(
         payload = interrupt_values[0] if interrupt_values else {}
         yield CheckpointEvent(
             session_id=thread_id,
-            stage_completed=state.values.get("current_stage", "unknown"),
+            # Use the interrupt payload's stage_completed — state.current_stage already
+            # points to the NEXT stage by the time we read it (Bug #2)
+            stage_completed=payload.get("stage_completed", state.values.get("current_stage", "unknown")),
             interrupt_type=payload.get("type", "checkpoint"),
             payload=payload,
         )
@@ -410,7 +419,11 @@ async def _stream_bug_graph(
         if not bug_report:
             yield ErrorEvent(message="Bug reproduction completed but produced no report.")
             return
-        yield BugResultEvent(session_id=thread_id, bug_report=bug_report)
+        yield BugResultEvent(
+            session_id=thread_id,
+            bug_report=bug_report,
+            full_state=dict(state.values),
+        )
 
 
 # ── Tool summary builders ─────────────────────────────────────────────────────

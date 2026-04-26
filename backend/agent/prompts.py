@@ -515,7 +515,7 @@ This is a synthesis stage — use tools only if a Jira push is needed.
 2. Synthesize a `BugReport` with ALL of the following fields:
 
    - `title` — one concise sentence describing the bug (e.g. "Fast Travel wipes equipped items via InventoryManager.reset")
-   - `severity` — from triage: critical | high | medium | low
+   - `severity` — copy EXACTLY from triage output. Do not adjust, override, or downgrade it.
    - `affected_components` — list of component/module names from mechanics
    - `root_cause` — 2-3 sentence plain-English explanation backed by the top hypothesis + evidence
    - `reproduction_steps` — the ordered steps list from reproduction_plan (copy as-is)
