@@ -1,6 +1,6 @@
-import { Zap, Layers, GitPullRequest, Loader2 } from '@/lib/lucide-icons';
+import { Zap, Layers, GitPullRequest, Loader2, Settings2 } from '@/lib/lucide-icons';
 
-export type AppView = 'graph' | 'analyze';
+export type AppView = 'graph' | 'analyze' | 'settings';
 
 interface NavbarProps {
   view: AppView;
@@ -68,6 +68,17 @@ export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflow
         {analyzing && (
           <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-accent" />
         )}
+      </button>
+      <button
+        onClick={() => onViewChange('settings')}
+        className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+          view === 'settings'
+            ? 'bg-surface text-text-primary shadow-sm'
+            : 'text-text-muted hover:text-text-secondary'
+        }`}
+      >
+        <Settings2 className="h-3.5 w-3.5" />
+        Settings
       </button>
     </div>
   </header>

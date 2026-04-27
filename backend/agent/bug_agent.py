@@ -13,6 +13,7 @@ Entry points:
 
 import asyncio
 import os
+import re
 import traceback
 from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
@@ -23,8 +24,9 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 
-from agent.agent import BugReproductionState
-from models import AgentStepEvent, CheckpointEvent, ErrorEvent, StageChangeEvent
+from agent.agent import BugReproductionState, _extract_owner_repo
+from indexer import get_repo_name
+from models import AgentStepEvent, CheckpointEvent, ErrorEvent, StageChangeEvent, BugReport
 
 # ── Bug result event ──────────────────────────────────────────────────────────
 # Temporary definition — move to models.py when P3 defines BugReportResultEvent.
@@ -40,11 +42,16 @@ class BugResultEvent(BaseModel):
 # Heavy stages (mechanics, reproduction, research) need Sonnet for deep reasoning.
 # Light stages (triage = classification, report = synthesis) run on Haiku (~37x cheaper).
 
+_anthropic_key = (
+    os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    or os.environ.get("ANTHROPIC_API_KEY")
+    or "dummy-not-configured"
+)
 _llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     temperature=0,
     max_tokens=4096,
-    api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
+    api_key=_anthropic_key,
     base_url=os.environ.get("ANTHROPIC_BASE_URL"),
 )
 
@@ -52,7 +59,7 @@ _llm_light = ChatAnthropic(
     model="claude-haiku-4-5-20251001",
     temperature=0,
     max_tokens=4096,
-    api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"),
+    api_key=_anthropic_key,
     base_url=os.environ.get("ANTHROPIC_BASE_URL"),
 )
 
@@ -261,6 +268,7 @@ async def run_bug_agent(
     jira_ticket: str | None = None,
     attachments: list[str] | None = None,
     session_id: str | None = None,
+    pr_url: str = "",
 ) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
     """
     Start a new bug reproduction session.
@@ -271,7 +279,7 @@ async def run_bug_agent(
         async with asyncio.timeout(TIMEOUT_SECONDS):
             async for event in _start_bug_graph(
                 description, environment, severity_input,
-                repo_name, jira_ticket, attachments or [], session_id,
+                repo_name, jira_ticket, attachments or [], session_id, pr_url=pr_url,
             ):
                 yield event
     except TimeoutError:
@@ -314,10 +322,14 @@ async def _start_bug_graph(
     jira_ticket: str | None,
     attachments: list[str],
     session_id: str | None,
+    pr_url: str = "",
 ) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
     thread_id = session_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
 
+    from agent.prefetch import prefetch_context
+
+    pref = await prefetch_context(pr_url, repo_name)
     initial_state: BugReproductionState = {
         "description": description,
         "environment": environment,
@@ -326,8 +338,8 @@ async def _start_bug_graph(
         "jira_ticket": jira_ticket,
         "attachments": attachments,
         "session_id": thread_id,
-        "repo_stats": {},
-        "processes": [],
+        "repo_stats": pref.get("stats", {}),
+        "processes": pref.get("processes", []),
         "triage": {},
         "mechanics": {},
         "reproduction_plan": {},
@@ -429,6 +441,19 @@ async def _stream_bug_graph(
         if not bug_report:
             yield ErrorEvent(message="Bug reproduction completed but produced no report.")
             return
+        from agent.sessions import get_session, update_session
+
+        try:
+            br_parsed = (
+                bug_report
+                if isinstance(bug_report, BugReport)
+                else BugReport.model_validate(bug_report)
+            )
+            s = get_session(thread_id)
+            if s is not None and br_parsed is not None:
+                update_session(thread_id, bug_report=br_parsed, current_stage="done")
+        except Exception:
+            pass
         yield BugResultEvent(
             session_id=thread_id,
             bug_report=bug_report,
@@ -470,3 +495,81 @@ def _bug_tool_summary(tool_name: str, tool_input: dict) -> str:
         return builder(tool_input) if builder else f"Calling tool: {tool_name}"
     except Exception:
         return f"Calling tool: {tool_name}"
+
+
+# ── Person 3 API aliases (main.py) + sessions + registry ────────────────────
+
+def _repo_name_for_bug(repo_url: str | None) -> str | None:
+    if not repo_url:
+        return None
+    if "/pull/" in repo_url:
+        o_r = _extract_owner_repo(repo_url)
+        if o_r:
+            return get_repo_name(f"{o_r[0]}/{o_r[1]}")
+    m = re.search(r"github\.com/([^/]+)/([^/]+)", repo_url)
+    if m:
+        return get_repo_name(f"{m.group(1)}/{m.group(2)}")
+    return None
+
+
+def _resume_to_interrupt_p3(user_response: dict) -> dict:
+    r = {**user_response}
+    a = r.get("action", "approve")
+    if a in ("add_context", "refine"):
+        c = r.get("additional_context") or r.get("feedback")
+        if c:
+            r["additional_context"] = c
+            r["feedback"] = c
+            r["context"] = c
+    return r
+
+
+async def run_bug_report(
+    description: str,
+    environment: str | None = None,
+    severity: str | None = None,
+    repo_url: str | None = None,
+    jira_ticket: str | None = None,
+    attachments: list[str] | None = None,
+) -> Any:
+    """P3: create `Session` + `bug_run_registry` entry, then run `run_bug_agent`."""
+    from agent.bug_run_registry import mark_bug_run_started
+    from agent.sessions import SessionType, create_session, update_session
+
+    any_sess = create_session(
+        pr_url=repo_url or "bug://session",
+        session_type=SessionType.BUG_REPRODUCTION,
+        bug_description=description,
+    )
+    session_id = any_sess.session_id
+    if repo_url and repo_url != "bug://session":
+        update_session(session_id, pr_url=repo_url)
+    mark_bug_run_started(session_id)
+    repo = _repo_name_for_bug(repo_url) if repo_url else None
+    async for ev in run_bug_agent(
+        description=description,
+        environment=environment,
+        severity_input=severity,
+        repo_name=repo,
+        jira_ticket=jira_ticket,
+        attachments=attachments,
+        session_id=session_id,
+        pr_url=repo_url or "",
+    ):
+        yield ev
+
+
+async def continue_bug_report(session_id: str, user_response: dict) -> Any:
+    from agent.bug_run_registry import is_active_bug_run
+    from agent.sessions import get_session
+    if get_session(session_id) is None:
+        yield ErrorEvent(message="Session not found for bug pipeline.")
+        return
+    if (not is_active_bug_run(session_id)) and (session_id not in _bug_sessions):
+        yield ErrorEvent(
+            message="This session was not started with POST /bug-report, or the server was restarted.",
+        )
+        return
+    res = _resume_to_interrupt_p3(user_response)
+    async for ev in continue_bug_agent(session_id, res):
+        yield ev

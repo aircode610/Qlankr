@@ -210,3 +210,163 @@ class TestRunDoneEvent(BaseModel):
     errors: int
     skipped: int
     duration_ms: int
+
+
+# ─── Sprint 3: Bug pipeline requests / outputs ───────────────────────────────
+
+class BugReportRequest(BaseModel):
+    description: str
+    environment: str | None = None
+    severity: Literal["critical", "major", "minor", "trivial"] | None = None
+    repo_url: str | None = None
+    jira_ticket: str | None = None
+    attachments: list[str] = Field(default_factory=list)
+    session_id: str | None = None
+
+
+class BugContinueRequest(BaseModel):
+    action: Literal["approve", "refine", "add_context"]
+    feedback: str | None = None
+    additional_context: str | None = None
+
+
+class ExportRequest(BaseModel):
+    format: Literal["markdown", "pdf"] = "markdown"
+    push_to_jira: bool = False
+
+
+class IntegrationConfigRequest(BaseModel):
+    name: str
+    credentials: dict
+
+
+class TriageResult(BaseModel):
+    category: str
+    keywords: list[str]
+    affected_area: str
+    severity_estimate: Literal["critical", "major", "minor", "trivial"]
+    similar_issues: list[dict] = Field(default_factory=list)
+    confidence: Literal["high", "medium", "low"]
+
+
+class CodePath(BaseModel):
+    entry_point: str
+    path: list[str]
+    description: str
+
+
+class MechanicsAnalysis(BaseModel):
+    components: list[AffectedComponent]
+    code_paths: list[CodePath]
+    entry_points: list[str]
+    root_cause_hypotheses: list[str]
+
+
+class ReproductionPlan(BaseModel):
+    preconditions: str
+    steps: list[E2ETestStep]
+    expected_vs_actual: str
+    data_requirements: list[str]
+    api_calls: list[dict] = Field(default_factory=list)
+
+
+class LogEntry(BaseModel):
+    timestamp: str
+    level: str
+    message: str
+    source: str
+    labels: dict = Field(default_factory=dict)
+
+
+class DocReference(BaseModel):
+    title: str
+    url: str
+    source: str
+    snippet: str
+
+
+class RelatedIssue(BaseModel):
+    key: str
+    summary: str
+    status: str
+    url: str
+
+
+class ResearchFindings(BaseModel):
+    log_entries: list[LogEntry] = Field(default_factory=list)
+    doc_references: list[DocReference] = Field(default_factory=list)
+    related_issues: list[RelatedIssue] = Field(default_factory=list)
+    db_state: list[dict] = Field(default_factory=list)
+    admin_notes: list[str] = Field(default_factory=list)
+    evidence_summary: str = ""
+
+
+class BugReport(BaseModel):
+    title: str
+    severity: Literal["critical", "major", "minor", "trivial"]
+    category: str
+    environment: str
+    reproduction_steps: list[E2ETestStep]
+    expected_behavior: str
+    actual_behavior: str
+    root_cause_analysis: str
+    affected_components: list[AffectedComponent]
+    evidence: ResearchFindings
+    recommendations: list[str]
+    confidence: Literal["high", "medium", "low"]
+    jira_url: str | None = None
+
+
+class BugReportResponse(BaseModel):
+    session_id: str
+    bug_report: BugReport
+    agent_steps: int
+
+
+# ─── Sprint 3: Bug SSE events ──────────────────────────────────────────────────
+
+class BugStageChangeEvent(BaseModel):
+    type: Literal["bug_stage_change"] = "bug_stage_change"
+    stage: str
+    summary: str
+
+
+class BugCheckpointEvent(BaseModel):
+    type: Literal["bug_checkpoint"] = "bug_checkpoint"
+    session_id: str
+    stage_completed: str
+    interrupt_type: str = "bug_checkpoint"
+    payload: dict = Field(default_factory=dict)
+
+
+class ResearchProgressEvent(BaseModel):
+    type: Literal["research_progress"] = "research_progress"
+    source: str
+    finding_count: int
+    summary: str
+
+
+class BugReportResultEvent(BaseModel):
+    type: Literal["bug_result"] = "bug_result"
+    session_id: str
+    report: BugReport
+    agent_steps: int
+
+
+class ExportReadyEvent(BaseModel):
+    type: Literal["export_ready"] = "export_ready"
+    format: str
+    download_url: str
+
+
+# ─── Sprint 3: Integration settings ───────────────────────────────────────────
+
+class IntegrationStatus(BaseModel):
+    name: str
+    configured: bool
+    healthy: bool
+    message: str = ""
+
+
+class IntegrationSettingsResponse(BaseModel):
+    integrations: list[IntegrationStatus]

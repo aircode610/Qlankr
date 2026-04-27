@@ -115,7 +115,10 @@ async def test_analyze_continue_unknown_session_returns_404(client):
 
 @pytest.mark.asyncio
 async def test_analyze_continue_known_session_streams(client):
+    from agent import agent as ag
     session = create_session("https://github.com/o/r/pull/2")
+    # Impact analysis must register the thread in agent's store for /continue; mirror /analyze start
+    ag._sessions[session.session_id] = {"pr_url": "https://github.com/o/r/pull/2"}
     response = await client.post(
         f"/analyze/{session.session_id}/continue",
         json={"action": "approve"},

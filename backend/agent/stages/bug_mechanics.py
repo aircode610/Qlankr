@@ -83,10 +83,18 @@ async def mechanics_node(state: "BugReproductionState", llm: Any = None, client:
         "\n".join(f"  - {h}" for h in triage.get("initial_hypotheses", []))
     )
 
+    feedback = (state.get("mechanics_feedback") or "").strip()
+    feedback_block = (
+        f"\n\nUser feedback from checkpoint (incorporate this in your analysis):\n{feedback}\n"
+        if feedback
+        else ""
+    )
+
     human_content = (
         f"Analyse the mechanics of this bug:\n\n"
         f"Description: {state['description']}\n\n"
-        f"Triage findings:\n{triage_summary}\n\n"
+        f"Triage findings:\n{triage_summary}\n"
+        f"{feedback_block}\n"
         f"{repo_clause}"
     )
 

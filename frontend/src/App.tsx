@@ -6,6 +6,7 @@ import { StatusBar } from './components/StatusBar';
 import { Navbar, AppView } from './components/Navbar';
 import { IndexingPage } from './components/IndexingPage';
 import { PrAnalysisPanel } from './components/PrAnalysisPanel';
+import { SettingsPanel } from './components/SettingsPanel';
 import { AgentTraceDrawer } from './components/AgentTraceDrawer';
 import { TestPipelineResults } from './components/TestPipelineResults';
 import { UnitReviewPanel } from './components/UnitReviewPanel';
@@ -297,6 +298,12 @@ const AppContent = () => {
       )}
 
       {/* ── Analyze view ── */}
+      {view === 'settings' && (
+        <main className="min-h-0 flex-1 overflow-hidden">
+          <SettingsPanel />
+        </main>
+      )}
+
       {view === 'analyze' && (
         <main className="flex min-h-0 flex-1 overflow-hidden">
           {/* Left column — PR input + agent trace (narrow) */}
