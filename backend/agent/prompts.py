@@ -103,15 +103,20 @@ Call `submit_gather` with:
 - pr_title, pr_description, pr_author, pr_files, pr_diff
 - pr_summary: ONE sentence overview of the PR (max 25 words)
 - pr_summary_detail: 2-5 sentences with full context (motivation, scope, technical approach)
-- affected_components — list of objects with ALL fields above
+- affected_components — REQUIRED non-empty list of objects with ALL fields above
+
+CRITICAL: affected_components MUST contain at least one component. The call will be
+REJECTED if it is empty. Group changed files by module/subsystem — even a single
+component covering all files is acceptable. Do NOT call submit_gather until you have
+built the component list from the changed file paths and diff.
 
 ### Allowed tools
 get_pull_request, get_pull_request_files, get_pull_request_comments,
 get_file_contents, list_directory, search_code, get_commits,
 list_repos, impact, cypher, detect_changes
 
-### Budget: 10 tool calls maximum
-Stop and output what you have when you reach 10 calls.
+### Budget: 15 tool calls maximum
+Stop and output what you have when you reach 15 calls.
 Use confidence="low" and a best-effort impact_summary for any component you
 couldn't fully analyse before hitting the budget.
 """

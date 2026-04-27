@@ -754,6 +754,7 @@ const AppContent = () => {
                     checkpoint={checkpoint}
                     onApprove={() => handleCheckpointContinue('approve')}
                     onRefine={(fb) => handleCheckpointContinue('rerun', fb)}
+                    onFileNavigate={handleFileNavigate}
                   />
                 )}
 

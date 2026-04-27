@@ -17,7 +17,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, UNIT_PROMPT
-from agent.tools import filter_tools, get_mcp_client, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -126,7 +126,8 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
     if not unit_results:
         print(f"  [unit] budget hit without any submit — forcing synthesis from {tool_call_count} calls", flush=True)
         agent_state = await agent.aget_state(_stage_config)
-        accumulated = agent_state.values.get("messages", [])
+        # Fix any dangling tool_call_ids from the budget break before passing history to the fallback
+        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
         pending = "\n".join(f"- {c.get('component')}" for c in components)
         submit_agent = create_react_agent(
             model=llm,
@@ -140,7 +141,7 @@ async def run_unit(state: "AnalysisState", llm: Any) -> dict:
                 "Use the diff context already in this conversation. Prioritise high-risk components."
             ))]},
             version="v2",
-            config={"recursion_limit": 20},
+            config={"recursion_limit": 30},
         ):
             pass
 

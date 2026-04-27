@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qlankr — AI-Powered QA for Game Studios</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2234;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --accent3: #a78bfa;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --cyan: #06b6d4;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --border: #1e293b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ── Slide Container ── */
+  .slides { width: 100%; height: 100vh; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 60px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.5s ease;
+    text-align: center;
+  }
+  .slide.active {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* ── Navigation ── */
+  #nav {
+    position: fixed;
+    bottom: 32px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    z-index: 100;
+    background: rgba(17,24,39,0.8);
+    backdrop-filter: blur(8px);
+    border: 1px solid var(--border);
+    border-radius: 50px;
+    padding: 10px 24px;
+  }
+  #nav button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 18px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    transition: color 0.2s, background 0.2s;
+  }
+  #nav button:hover { color: var(--text); background: var(--border); }
+  #counter { color: var(--muted); font-size: 13px; min-width: 60px; text-align: center; }
+
+  #progress {
+    position: fixed;
+    top: 0; left: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--cyan));
+    transition: width 0.4s ease;
+    z-index: 100;
+  }
+
+  /* ── Typography ── */
+  .label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent2);
+    margin-bottom: 16px;
+  }
+  h1 { font-size: clamp(36px, 5vw, 64px); font-weight: 800; line-height: 1.1; }
+  h2 { font-size: clamp(26px, 3.5vw, 42px); font-weight: 700; line-height: 1.2; }
+  h3 { font-size: clamp(18px, 2vw, 24px); font-weight: 600; }
+  p { font-size: clamp(14px, 1.4vw, 18px); color: var(--muted); line-height: 1.7; }
+  .big { font-size: clamp(18px, 2.2vw, 28px); color: var(--text); line-height: 1.5; }
+
+  .gradient-text {
+    background: linear-gradient(135deg, var(--accent2), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px;
+  }
+  .card-grid {
+    display: grid;
+    gap: 20px;
+    width: 100%;
+    max-width: 1100px;
+  }
+  .card-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .card-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .card-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+  /* ── Stat pill ── */
+  .stat { font-size: clamp(32px, 4vw, 52px); font-weight: 800; }
+  .stat-label { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* ── Tag ── */
+  .tag {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 50px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .tag-purple { background: rgba(99,102,241,0.2); color: var(--accent2); border: 1px solid rgba(99,102,241,0.3); }
+  .tag-green  { background: rgba(34,197,94,0.2);  color: var(--green);   border: 1px solid rgba(34,197,94,0.3); }
+  .tag-red    { background: rgba(239,68,68,0.2);  color: var(--red);     border: 1px solid rgba(239,68,68,0.3); }
+  .tag-yellow { background: rgba(245,158,11,0.2); color: var(--yellow);  border: 1px solid rgba(245,158,11,0.3); }
+  .tag-cyan   { background: rgba(6,182,212,0.2);  color: var(--cyan);    border: 1px solid rgba(6,182,212,0.3); }
+
+  /* ── List ── */
+  ul.check { list-style: none; text-align: left; }
+  ul.check li { padding: 6px 0; font-size: clamp(13px,1.3vw,16px); color: var(--muted); display: flex; align-items: flex-start; gap: 10px; }
+  ul.check li::before { content: '✓'; color: var(--green); font-weight: 700; flex-shrink: 0; }
+  ul.cross li::before { content: '✗'; color: var(--red); }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: nowrap;
+    width: 100%;
+    max-width: 1000px;
+  }
+  .flow-step {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 12px;
+    text-align: center;
+    position: relative;
+  }
+  .flow-step .fs-icon { font-size: 22px; margin-bottom: 6px; }
+  .flow-step .fs-title { font-size: 12px; font-weight: 700; color: var(--text); }
+  .flow-step .fs-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .flow-arrow {
+    color: var(--accent);
+    font-size: 22px;
+    padding: 0 4px;
+    flex-shrink: 0;
+  }
+  .flow-step.checkpoint { border-color: var(--yellow); }
+  .flow-step.checkpoint .fs-title { color: var(--yellow); }
+
+  /* ── Badge ── */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+
+  /* ── Timeline ── */
+  .timeline { display: flex; flex-direction: column; gap: 16px; text-align: left; width: 100%; max-width: 700px; }
+  .tl-item { display: flex; gap: 16px; align-items: flex-start; }
+  .tl-dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; margin-top: 2px; }
+  .tl-body h4 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+  .tl-body p  { font-size: 13px; color: var(--muted); }
+
+  /* ── Quote ── */
+  blockquote {
+    border-left: 4px solid var(--accent);
+    padding-left: 20px;
+    text-align: left;
+    font-style: italic;
+    color: var(--text);
+    font-size: clamp(14px, 1.5vw, 19px);
+    line-height: 1.6;
+    max-width: 800px;
+  }
+  blockquote footer { font-style: normal; font-size: 13px; color: var(--muted); margin-top: 10px; }
+
+  /* ── Integration grid ── */
+  .integration-pill {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 18px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .int-icon { font-size: 20px; }
+
+  /* ── Placeholder image ── */
+  .img-placeholder {
+    background: var(--surface2);
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .img-placeholder .ph-icon { font-size: 32px; opacity: 0.5; }
+
+  /* ── Graph node viz ── */
+  .graph-demo {
+    position: relative;
+    width: 340px;
+    height: 220px;
+  }
+  .gnode {
+    position: absolute;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+  }
+  .gedge {
+    position: absolute;
+    background: var(--accent);
+    opacity: 0.3;
+    transform-origin: left center;
+  }
+
+  /* ── Two-col layout ── */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 40px;
+    align-items: center;
+    width: 100%;
+    max-width: 1100px;
+  }
+  .two-col .left { text-align: left; }
+  .two-col .right { text-align: left; }
+
+  /* ── Backgrounds / decorators ── */
+  .glow {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+  }
+
+  /* ── Table ── */
+  table.criteria {
+    width: 100%;
+    max-width: 900px;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  table.criteria th {
+    background: var(--surface2);
+    color: var(--accent2);
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  table.criteria td {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  table.criteria td:first-child { color: var(--text); font-weight: 600; }
+
+  /* ── Slide-specific helpers ── */
+  .spacer { flex: 1; }
+  .gap-sm { gap: 12px; }
+  .gap-md { gap: 20px; }
+  .w-full  { width: 100%; }
+  .mw-900  { max-width: 900px; }
+  .mw-1100 { max-width: 1100px; }
+  .flex    { display: flex; }
+  .flex-col { flex-direction: column; }
+  .items-start { align-items: flex-start; }
+  .text-left { text-align: left; }
+  .mt-6  { margin-top: 6px; }
+  .mt-12 { margin-top: 12px; }
+  .mt-20 { margin-top: 20px; }
+  .mt-32 { margin-top: 32px; }
+  .mb-20 { margin-bottom: 20px; }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<div class="slides">
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 1 — TITLE                                         -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide active" id="s1">
+    <div class="glow" style="width:500px;height:500px;background:rgba(99,102,241,0.12);top:-100px;left:-100px;"></div>
+    <div class="glow" style="width:400px;height:400px;background:rgba(6,182,212,0.08);bottom:-100px;right:-100px;"></div>
+
+    <div class="label">Qlankr</div>
+    <h1>AI-Powered QA<br>for <span class="gradient-text">Game Studios</span></h1>
+    <div style="margin-top:24px;max-width:640px;">
+      <p class="big">Automated impact analysis and bug reproduction — so QA teams ship faster and defects never reach players.</p>
+    </div>
+    <div style="margin-top:40px;display:flex;gap:16px;flex-wrap:wrap;justify-content:center;">
+      <span class="badge" style="border-color:rgba(99,102,241,0.4);color:var(--accent2);background:rgba(99,102,241,0.1);">🎮 Game QA</span>
+      <span class="badge" style="border-color:rgba(6,182,212,0.4);color:var(--cyan);background:rgba(6,182,212,0.1);">🤖 AI Agents</span>
+      <span class="badge" style="border-color:rgba(34,197,94,0.4);color:var(--green);background:rgba(34,197,94,0.1);">🔗 MCP Integrations</span>
+      <span class="badge" style="border-color:rgba(245,158,11,0.4);color:var(--yellow);background:rgba(245,158,11,0.1);">📊 Knowledge Graph</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 2 — THE PROBLEM (CONTEXT)                         -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s2">
+    <div class="label">The Problem</div>
+    <h2>Game QA is <span class="gradient-text">broken</span> — and nobody's fixing it</h2>
+    <div class="card-grid cols-3 mt-32" style="max-width:1000px;">
+      <div class="card" style="border-color:rgba(239,68,68,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">🏢</div>
+        <h3 style="color:var(--red);margin-bottom:8px;">Big studios test privately</h3>
+        <p>AAA publishers run internal QA departments with proprietary tooling — none of it is shared. Every indie studio starts from scratch.</p>
+      </div>
+      <div class="card" style="border-color:rgba(245,158,11,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">🔍</div>
+        <h3 style="color:var(--yellow);margin-bottom:8px;">Reproduction is a black hole</h3>
+        <p>QA testers spend hours chasing one bug — digging through logs, databases, commits, and Slack threads with no unified context.</p>
+      </div>
+      <div class="card" style="border-color:rgba(99,102,241,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">📋</div>
+        <h3 style="color:var(--accent2);margin-bottom:8px;">"What do I even test?"</h3>
+        <p>When a PR lands, deciding which tests matter is guesswork. Impact analysis is incomplete — critical modules get tested "just in case."</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 3 — WHAT WE HEARD FROM STUDIOS                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s3">
+    <div class="label">What We Heard</div>
+    <h2>We heard it from studios — <span class="gradient-text">directly</span></h2>
+    <div class="card-grid cols-3 mt-32" style="max-width:1100px;">
+      <div class="card" style="text-align:left;border-color:rgba(239,68,68,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">🔄</div>
+        <h3 style="color:var(--red);margin-bottom:8px;">Regression testing everything</h3>
+        <p>Without knowing what a change actually impacts, QA teams default to re-testing entire modules — even ones that weren't touched. It's defensive, wasteful, and slows every release.</p>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(245,158,11,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">🎯</div>
+        <h3 style="color:var(--yellow);margin-bottom:8px;">No real impact analysis</h3>
+        <p>Teams guess which systems are affected by a PR. There's no automated way to trace dependencies — so critical paths get missed and safe paths get over-tested.</p>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
+        <div style="font-size:36px;margin-bottom:12px;">⏳</div>
+        <h3 style="color:var(--accent2);margin-bottom:8px;">Hours collecting context for devs</h3>
+        <p>When a bug is found, QA spends hours pulling logs, checking databases, reviewing commits, searching Jira, and talking to support — just to hand devs a report they can actually act on.</p>
+      </div>
+    </div>
+    <div class="card mt-20" style="max-width:1100px;text-align:left;">
+      <div style="display:flex;gap:40px;flex-wrap:wrap;justify-content:center;">
+        <div>
+          <div class="label" style="margin-bottom:10px;">Key findings</div>
+          <ul class="check" style="display:flex;flex-direction:column;gap:6px;">
+            <li><strong>Regression testing</strong> is the default because impact analysis doesn't exist</li>
+            <li><strong>Bug context gathering</strong> is the #1 time sink in the QA workflow</li>
+            <li>Incomplete reports cause <strong>dev back-and-forth</strong> that doubles resolution time</li>
+          </ul>
+        </div>
+        <div style="display:flex;align-items:center;">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <span class="tag tag-green">2 interviews</span>
+            <span class="tag tag-purple">Mom Test methodology</span>
+            <span class="tag tag-cyan">Problem validated</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 4 — SOLUTION OVERVIEW                             -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s4">
+    <div class="label">The Solution</div>
+    <h2>Qlankr: <span class="gradient-text">Two AI workflows</span>, one QA platform</h2>
+    <div class="two-col mt-32" style="max-width:1100px;">
+      <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.4);">
+        <div style="font-size:32px;margin-bottom:12px;">🔬</div>
+        <h3 style="color:var(--accent2);margin-bottom:12px;">Impact Analysis</h3>
+        <p style="margin-bottom:16px;">Give it a PR URL. It reads the diff, traces which game systems are affected, and generates a prioritized testing plan.</p>
+        <ul class="check" style="display:flex;flex-direction:column;gap:6px;">
+          <li>Unit test specs per component</li>
+          <li>Integration touchpoints across modules</li>
+          <li>E2E scenarios for player-facing flows</li>
+          <li>Human review checkpoint — you stay in control</li>
+        </ul>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(6,182,212,0.4);">
+        <div style="font-size:32px;margin-bottom:12px;">🐛</div>
+        <h3 style="color:var(--cyan);margin-bottom:12px;">Bug Reproduction</h3>
+        <p style="margin-bottom:16px;">Describe a bug in plain text. The agent traces the code path, queries logs, Jira, docs, and network traces — then writes a developer-ready report.</p>
+        <ul class="check" style="display:flex;flex-direction:column;gap:6px;">
+          <li>Root cause hypotheses with ranked evidence</li>
+          <li>Step-by-step reproduction plan</li>
+          <li>Evidence aggregated from 8+ sources</li>
+          <li>Auto-creates or updates Jira issues</li>
+        </ul>
+      </div>
+    </div>
+    <!-- PRODUCT SCREENSHOT PLACEHOLDER -->
+    <div class="img-placeholder mt-20" style="width:100%;max-width:1100px;height:120px;">
+      <div class="ph-icon">🖥️</div>
+      <span>[ Screenshot: Dashboard — Impact Analysis input + live agent trace feed ]</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 6 — INDEXING / KNOWLEDGE GRAPH                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s5">
+    <div class="label">Technical Depth · Indexing</div>
+    <h2>A <span class="gradient-text">Knowledge Graph</span> that understands your game code</h2>
+    <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
+      <div class="left">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="label" style="margin-bottom:12px;">Indexing Pipeline</div>
+          <div class="timeline">
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(99,102,241,0.2);color:var(--accent2);">📥</div>
+              <div class="tl-body">
+                <h4>Clone repo</h4>
+                <p>Shallow clone (depth=1) for speed. One-time setup per repository.</p>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(6,182,212,0.2);color:var(--cyan);">🔍</div>
+              <div class="tl-body">
+                <h4>GitNexus analyzes source</h4>
+                <p>Parses all files → builds call graphs → detects communities → extracts execution processes.</p>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(34,197,94,0.2);color:var(--green);">🗄️</div>
+              <div class="tl-body">
+                <h4>Graph loaded to Neo4j</h4>
+                <p>Files as nodes, CALLS/IMPORTS as edges. Cached in memory for instant queries.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:10px;">Why a knowledge graph?</div>
+          <p style="font-size:14px;">Game code is deeply interconnected. A PR touching <code style="color:var(--accent2);">PlayerInventory</code> might break <code style="color:var(--cyan);">CraftingSystem</code>, <code style="color:var(--green);">SaveLoad</code>, and <code style="color:var(--yellow);">UIManager</code> — through 4 levels of calls. Flat file diffs miss this. The graph traverses the actual dependency chain to surface real risk.</p>
+        </div>
+      </div>
+      <div class="right" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="label">Graph Query Tools</div>
+        <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
+          <h3 style="font-size:14px;color:var(--accent2);margin-bottom:4px;">impact</h3>
+          <p style="font-size:13px;">Returns every system in the blast radius of a changed file.</p>
+        </div>
+        <div class="card" style="text-align:left;border-color:rgba(6,182,212,0.3);">
+          <h3 style="font-size:14px;color:var(--cyan);margin-bottom:4px;">detect_changes</h3>
+          <p style="font-size:13px;">Maps PR diff lines to the functions and modules they belong to.</p>
+        </div>
+        <div class="card" style="text-align:left;border-color:rgba(34,197,94,0.3);">
+          <h3 style="font-size:14px;color:var(--green);margin-bottom:4px;">context</h3>
+          <p style="font-size:13px;">Shows every caller and callee of a given function or file.</p>
+        </div>
+        <div class="card" style="text-align:left;border-color:rgba(245,158,11,0.3);">
+          <h3 style="font-size:14px;color:var(--yellow);margin-bottom:4px;">list_processes</h3>
+          <p style="font-size:13px;">Extracts end-to-end execution flows like player login or item purchase.</p>
+        </div>
+        <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
+          <h3 style="font-size:14px;color:var(--accent2);margin-bottom:4px;">query</h3>
+          <p style="font-size:13px;">Semantic search over symbols and files by meaning, not just name.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 7 — IMPACT ANALYSIS AGENT WORKFLOW                -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s6">
+    <div class="label">Technical Depth · Agent Design</div>
+    <h2>Impact Analysis: <span class="gradient-text">LangGraph ReAct</span> with human-in-the-loop</h2>
+    <div class="flow mt-32">
+      <div class="flow-step" style="border-color:rgba(99,102,241,0.4);">
+        <div class="fs-icon">📥</div>
+        <div class="fs-title">Gather</div>
+        <div class="fs-sub">PR diff + metadata, affected components</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(6,182,212,0.4);">
+        <div class="fs-icon">🧪</div>
+        <div class="fs-title">Unit Tests</div>
+        <div class="fs-sub">Per-component specs, mocks, priorities</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step checkpoint">
+        <div class="fs-icon">👁️</div>
+        <div class="fs-title">Human Review</div>
+        <div class="fs-sub">Approve or refine with feedback</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(34,197,94,0.4);">
+        <div class="fs-icon">🔀</div>
+        <div class="fs-title">Choice</div>
+        <div class="fs-sub">Integration tests or E2E planning</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(245,158,11,0.4);">
+        <div class="fs-icon">📊</div>
+        <div class="fs-title">Deep Tests</div>
+        <div class="fs-sub">Cross-module + player-facing flows</div>
+      </div>
+    </div>
+    <div class="card-grid cols-3 mt-20" style="max-width:1000px;">
+      <div class="card" style="text-align:left;">
+        <div class="label" style="margin-bottom:8px;">Tool Budget</div>
+        <p style="font-size:13px;">Each stage gets a fixed call budget (10–20 tool calls). If exhausted, a forced-submit agent captures partial results — no silent failures.</p>
+      </div>
+      <div class="card" style="text-align:left;">
+        <div class="label" style="margin-bottom:8px;">Human-in-the-loop</div>
+        <p style="font-size:13px;">LangGraph <code style="color:var(--accent2);">interrupt()</code> pauses execution at review points. QA can approve or refine — then the graph resumes from that exact state.</p>
+      </div>
+      <div class="card" style="text-align:left;">
+        <div class="label" style="margin-bottom:8px;">Output</div>
+        <p style="font-size:13px;">Structured <code style="color:var(--cyan);">AnalyzeResponse</code>: affected components, unit test specs, integration touchpoints, E2E scenarios — each with confidence scores.</p>
+      </div>
+    </div>
+    <!-- PRODUCT SCREENSHOT PLACEHOLDER -->
+    <div class="img-placeholder mt-20" style="width:100%;max-width:1000px;height:90px;">
+      <div class="ph-icon">🖥️</div>
+      <span>[ Screenshot: Unit Review Panel — component list, test cases, approve / refine UI ]</span>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 8 — BUG REPRODUCTION AGENT WORKFLOW               -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s7">
+    <div class="label">Technical Depth · Agent Design</div>
+    <h2>Bug Reproduction: <span class="gradient-text">5-stage pipeline</span> with evidence gathering</h2>
+    <div class="flow mt-20" style="max-width:1100px;">
+      <div class="flow-step" style="border-color:rgba(245,158,11,0.3);">
+        <div class="fs-icon">🏷️</div>
+        <div class="fs-title">Triage</div>
+        <div class="fs-sub">Classify, keywords, Jira similar issues <br><span style="color:var(--yellow);font-size:10px;">Haiku</span></div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(99,102,241,0.4);">
+        <div class="fs-icon">🔬</div>
+        <div class="fs-title">Mechanics</div>
+        <div class="fs-sub">Trace code paths, rank hypotheses <br><span style="color:var(--accent2);font-size:10px;">Sonnet</span></div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step checkpoint">
+        <div class="fs-icon">👁️</div>
+        <div class="fs-title">Review #1</div>
+        <div class="fs-sub">QA verifies components</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(6,182,212,0.4);">
+        <div class="fs-icon">📋</div>
+        <div class="fs-title">Repro Steps</div>
+        <div class="fs-sub">Plan from code + processes <br><span style="color:var(--cyan);font-size:10px;">Sonnet</span></div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(34,197,94,0.4);">
+        <div class="fs-icon">🔎</div>
+        <div class="fs-title">Research</div>
+        <div class="fs-sub">Logs, Jira, docs, network <br><span style="color:var(--green);font-size:10px;">Sonnet</span></div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step checkpoint">
+        <div class="fs-icon">👁️</div>
+        <div class="fs-title">Review #2</div>
+        <div class="fs-sub">QA adds context</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="border-color:rgba(245,158,11,0.3);">
+        <div class="fs-icon">📄</div>
+        <div class="fs-title">Report</div>
+        <div class="fs-sub">Structured bug report <br><span style="color:var(--yellow);font-size:10px;">Haiku</span></div>
+      </div>
+    </div>
+    <div class="card-grid cols-2 mt-20" style="max-width:1100px;">
+      <div class="card" style="text-align:left;">
+        <div class="label" style="margin-bottom:8px;">Smart LLM strategy</div>
+        <p style="font-size:13px;">Heavy reasoning stages (mechanics, research, reproduction) use <strong style="color:var(--accent2);">Claude Sonnet 4.6</strong> for depth. Lightweight stages (triage, report synthesis) use <strong style="color:var(--yellow);">Claude Haiku 4.5</strong> — ~37× cheaper. Best quality where it counts, cost-efficient everywhere else.</p>
+      </div>
+      <div class="card" style="text-align:left;">
+        <div class="label" style="margin-bottom:8px;">MCP client lifecycle</div>
+        <p style="font-size:13px;">A single <code style="color:var(--cyan);">MultiServerMCPClient</code> is created at session start and reused across all 5 stages — avoiding repeated server spawns. Cleaned up on session close. Integrations like Grafana, Jira, and Notion are queried only in the research stage where they're relevant.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 9 — MCP INTEGRATIONS                              -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s8">
+    <div class="label">Technical Depth · Integrations</div>
+    <h2>MCP: <span class="gradient-text">Plug into every tool</span> studios already use</h2>
+    <div class="two-col mt-20" style="max-width:1100px;align-items:start;">
+      <div>
+        <p style="text-align:left;margin-bottom:20px;">The Model Context Protocol (MCP) lets Qlankr talk to external systems through a standardized tool interface — no custom API glue per integration.</p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div class="integration-pill">
+            <span class="int-icon">🐙</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">GitHub</div>
+              <div style="font-size:11px;color:var(--muted);">PR diff, file contents, commits</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">📊</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Grafana</div>
+              <div style="font-size:11px;color:var(--muted);">Query logs &amp; metrics (custom MCP)</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">🎫</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Jira</div>
+              <div style="font-size:11px;color:var(--muted);">Search, create &amp; update issues</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">🔍</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Kibana / Elasticsearch</div>
+              <div style="font-size:11px;color:var(--muted);">Full-text log search (custom MCP)</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">📝</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Notion</div>
+              <div style="font-size:11px;color:var(--muted);">Search runbooks &amp; docs</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">📮</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Postman</div>
+              <div style="font-size:11px;color:var(--muted);">API trace replay (custom MCP)</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">📚</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Confluence</div>
+              <div style="font-size:11px;color:var(--muted);">Internal wiki &amp; runbooks</div>
+            </div>
+          </div>
+          <div class="integration-pill">
+            <span class="int-icon">🌐</span>
+            <div>
+              <div style="font-size:13px;font-weight:700;">Network Sniffer</div>
+              <div style="font-size:11px;color:var(--muted);">HAR/pcap trace parsing</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="left">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="label" style="margin-bottom:10px;">Why MCP matters for studios</div>
+          <p style="font-size:14px;">Studios don't want another silo. They want their bug reports in Jira, their logs from Grafana, and their docs from Notion — all in one AI-assisted flow. MCP makes that possible without custom integrations per client.</p>
+        </div>
+        <div class="card" style="text-align:left;">
+          <div class="label" style="margin-bottom:10px;">Stage-aware tool filtering</div>
+          <p style="font-size:14px;margin-bottom:12px;">Each agent stage only gets access to the tools it needs — preventing hallucinations and keeping tool context tight:</p>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;font-family:monospace;color:var(--muted);">
+            <div><span style="color:var(--accent2);">triage:</span> jira_search, search_code, impact</div>
+            <div><span style="color:var(--cyan);">mechanics:</span> cypher, query, get_file_contents</div>
+            <div><span style="color:var(--green);">research:</span> grafana_*, kibana_*, jira_*, notion_*, sniffer_*</div>
+            <div><span style="color:var(--yellow);">report:</span> jira_create_issue, jira_update_issue</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 10 — EVALUATION & ITERATION                       -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s9">
+    <div class="label">Technical Depth · Evaluation</div>
+    <h2>Built to <span class="gradient-text">get better</span> — not just run once</h2>
+    <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
+      <div class="left">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="label" style="margin-bottom:12px;">Human-in-the-loop as evaluation</div>
+          <div class="timeline">
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(245,158,11,0.2);color:var(--yellow);">1</div>
+              <div class="tl-body">
+                <h4>Checkpoint reviews</h4>
+                <p>QA explicitly approves or refines each stage — this is ground truth feedback on agent quality.</p>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(99,102,241,0.2);color:var(--accent2);">2</div>
+              <div class="tl-body">
+                <h4>Feedback-driven reruns</h4>
+                <p>When QA refines, the agent re-runs with explicit feedback injected — closing the loop within a session.</p>
+              </div>
+            </div>
+            <div class="tl-item">
+              <div class="tl-dot" style="background:rgba(34,197,94,0.2);color:var(--green);">3</div>
+              <div class="tl-body">
+                <h4>LangSmith evals</h4>
+                <p>Offline evaluation suite in <code style="color:var(--green);">backend/evals/</code> — run against test cases to track prompt quality regression.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="right">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="label" style="margin-bottom:10px;">Confidence scores on outputs</div>
+          <p style="font-size:14px;margin-bottom:12px;">Every bug report and component analysis includes a <strong style="color:var(--text);">confidence level</strong> (high / medium / low) derived from how much evidence was gathered. Low-confidence results are explicitly flagged — false confidence is worse than no result.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <span class="tag tag-green">high — multiple sources corroborate</span>
+            <span class="tag tag-yellow">medium — partial evidence</span>
+            <span class="tag tag-red">low — budget exhausted / sparse data</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:10px;">Budget exhaustion graceful fallback</div>
+          <p style="font-size:14px;">If a stage hits its tool call limit without completing, a forced-submit agent captures all accumulated context and produces a partial result — with confidence marked <code style="color:var(--red);">low</code>. No silent failures.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 11 — DEMO / PRODUCT WALKTHROUGH                   -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s10">
+    <div class="label">Product Demo</div>
+    <h2>See it in action — <span class="gradient-text">end-to-end</span></h2>
+    <div class="card-grid cols-2 mt-32" style="max-width:1100px;">
+      <div>
+        <div class="img-placeholder" style="height:240px;margin-bottom:12px;">
+          <div class="ph-icon">🔬</div>
+          <span>[ Screenshot: Impact Analysis — PR URL input, live agent step trace, affected components list ]</span>
+        </div>
+        <div class="card" style="text-align:left;">
+          <h3 style="color:var(--accent2);margin-bottom:8px;">Impact Analysis Flow</h3>
+          <ol style="padding-left:18px;font-size:13px;color:var(--muted);line-height:1.8;">
+            <li>Paste a GitHub PR URL</li>
+            <li>Agent indexes + traces affected systems</li>
+            <li>Review generated unit test specs</li>
+            <li>Choose integration tests or E2E planning</li>
+            <li>Export full test plan</li>
+          </ol>
+        </div>
+      </div>
+      <div>
+        <div class="img-placeholder" style="height:240px;margin-bottom:12px;">
+          <div class="ph-icon">🐛</div>
+          <span>[ Screenshot: Bug Report View — reproduction steps, evidence tabs (Logs/Docs/Issues), confidence badge ]</span>
+        </div>
+        <div class="card" style="text-align:left;">
+          <h3 style="color:var(--cyan);margin-bottom:8px;">Bug Reproduction Flow</h3>
+          <ol style="padding-left:18px;font-size:13px;color:var(--muted);line-height:1.8;">
+            <li>Describe bug in plain text</li>
+            <li>Agent classifies and traces code paths</li>
+            <li>QA reviews mechanics + approves</li>
+            <li>Research gathers logs, docs, Jira evidence</li>
+            <li>Final report auto-pushed to Jira</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 12 — TECHNICAL ARCHITECTURE SUMMARY               -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s11">
+    <div class="label">Architecture</div>
+    <h2>Full-stack, <span class="gradient-text">production-grade</span> system design</h2>
+    <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
+      <div class="left">
+        <div class="card" style="margin-bottom:16px;">
+          <div class="label" style="margin-bottom:10px;">Backend · Python + FastAPI</div>
+          <ul class="check" style="display:flex;flex-direction:column;gap:6px;">
+            <li>LangGraph state machines for both agent workflows</li>
+            <li>SSE streaming — live progress to frontend</li>
+            <li>MemorySaver checkpointer — sessions survive across HTTP calls</li>
+            <li>GitNexus CLI for code intelligence</li>
+            <li>Custom Python MCP servers for Grafana, Kibana, Postman</li>
+            <li>LangSmith evaluation suite in <code style="color:var(--green);">evals/</code></li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:10px;">Frontend · React + TypeScript</div>
+          <ul class="check" style="display:flex;flex-direction:column;gap:6px;">
+            <li>Sigma.js knowledge graph canvas with cluster view</li>
+            <li>Live agent step feed via EventSource</li>
+            <li>Checkpoint dialogs — approve / refine UI</li>
+            <li>Bug report view with evidence tabs (Logs / Docs / Issues / Network)</li>
+            <li>Settings panel for integration credentials</li>
+          </ul>
+        </div>
+      </div>
+      <div class="right">
+        <!-- Architecture diagram placeholder -->
+        <div class="img-placeholder" style="height:220px;margin-bottom:16px;">
+          <div class="ph-icon">🏗️</div>
+          <span>[ Screenshot: Settings panel — integration health status, credentials, green/red indicators ]</span>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:10px;">Key design decisions</div>
+          <table style="width:100%;font-size:12px;border-collapse:collapse;">
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 0;color:var(--text);font-weight:600;">Stage tool filtering</td>
+              <td style="padding:8px 0 8px 12px;color:var(--muted);">Prevents context pollution, reduces hallucinations</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 0;color:var(--text);font-weight:600;">Haiku for triage/report</td>
+              <td style="padding:8px 0 8px 12px;color:var(--muted);">Cost optimization without quality loss</td>
+            </tr>
+            <tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 0;color:var(--text);font-weight:600;">Single MCP client</td>
+              <td style="padding:8px 0 8px 12px;color:var(--muted);">Reused across 5 stages — no repeated spawns</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 0;color:var(--text);font-weight:600;">Budget exhaustion handler</td>
+              <td style="padding:8px 0 8px 12px;color:var(--muted);">Graceful partial results, never silent failures</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 13 — WHAT WE BUILT (MVP SCOPE)                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s12">
+    <div class="label">What We Built</div>
+    <h2>From <span class="gradient-text">zero to working product</span> — MVP and beyond</h2>
+    <div class="card-grid cols-2 mt-32" style="max-width:1000px;">
+      <div class="card" style="text-align:left;border-color:rgba(34,197,94,0.3);">
+        <h3 style="color:var(--green);margin-bottom:16px;">✅ MVP (Core 5 stories)</h3>
+        <ul class="check" style="display:flex;flex-direction:column;gap:8px;">
+          <li>Impact analysis on PR — end-to-end</li>
+          <li>Bug report input (plain text)</li>
+          <li>Mechanics &amp; component analysis</li>
+          <li>Research support (logs, DB, docs, admins)</li>
+          <li>Structured developer-ready bug reports</li>
+        </ul>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
+        <h3 style="color:var(--accent2);margin-bottom:16px;">🚀 Also delivered (post-MVP)</h3>
+        <ul class="check" style="display:flex;flex-direction:column;gap:8px;">
+          <li>Bug report export (Markdown + PDF)</li>
+          <li>Jira integration — auto create/update issues</li>
+          <li>Confluence &amp; Notion documentation search</li>
+          <li>Grafana + Kibana log querying</li>
+          <li>Traceability — full agent step audit trail</li>
+          <li>Confidence scoring on all outputs</li>
+          <li>Knowledge graph visualization</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card mt-20" style="max-width:1000px;">
+      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;">
+        <span class="tag tag-purple">LangGraph agent orchestration</span>
+        <span class="tag tag-cyan">8+ MCP integrations</span>
+        <span class="tag tag-green">GitNexus knowledge graph</span>
+        <span class="tag tag-yellow">SSE streaming UI</span>
+        <span class="tag tag-purple">Human-in-the-loop checkpoints</span>
+        <span class="tag tag-cyan">LangSmith evaluation</span>
+        <span class="tag tag-green">Custom MCP servers</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 14 — CLOSING / VISION                             -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s13">
+    <div class="glow" style="width:600px;height:600px;background:rgba(99,102,241,0.1);top:-200px;right:-200px;"></div>
+    <div class="glow" style="width:400px;height:400px;background:rgba(6,182,212,0.08);bottom:-100px;left:-100px;"></div>
+
+    <div class="label">Vision</div>
+    <h2>The future of QA is <span class="gradient-text">AI-assisted, not replaced</span></h2>
+    <div style="max-width:700px;margin-top:24px;">
+      <p class="big" style="color:var(--muted);">Qlankr doesn't replace QA testers. It gives them superpowers — turning hours of manual research into a structured report in minutes, so humans can focus on what machines can't: <strong style="color:var(--text);">judgment, creativity, and player empathy.</strong></p>
+    </div>
+    <div class="card-grid cols-3 mt-32" style="max-width:900px;">
+      <div class="card" style="text-align:center;border-color:rgba(99,102,241,0.3);">
+        <div style="font-size:28px;margin-bottom:8px;">🎮</div>
+        <h3 style="font-size:15px;margin-bottom:6px;">Better games</h3>
+        <p style="font-size:13px;">Fewer bugs reach players when QA is faster and more thorough</p>
+      </div>
+      <div class="card" style="text-align:center;border-color:rgba(6,182,212,0.3);">
+        <div style="font-size:28px;margin-bottom:8px;">⚡</div>
+        <h3 style="font-size:15px;margin-bottom:6px;">Faster releases</h3>
+        <p style="font-size:13px;">Impact analysis cuts testing time by targeting what matters</p>
+      </div>
+      <div class="card" style="text-align:center;border-color:rgba(34,197,94,0.3);">
+        <div style="font-size:28px;margin-bottom:8px;">🤝</div>
+        <h3 style="font-size:15px;margin-bottom:6px;">Better dev-QA loop</h3>
+        <p style="font-size:13px;">Developer-ready reports that eliminate the "can't reproduce" back-and-forth</p>
+      </div>
+    </div>
+    <div style="margin-top:40px;font-size:32px;font-weight:800;letter-spacing:2px;color:var(--accent2);">
+      Qlankr
+    </div>
+    <div style="color:var(--muted);font-size:15px;margin-top:8px;">AI-Powered QA · Built for Game Studios</div>
+  </div>
+
+</div><!-- /slides -->
+
+<!-- Navigation -->
+<div id="nav">
+  <button id="prevBtn" onclick="go(-1)">←</button>
+  <span id="counter">1 / 13</span>
+  <button id="nextBtn" onclick="go(1)">→</button>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const total = slides.length;
+  let current = 0;
+
+  function go(dir) {
+    slides[current].classList.remove('active');
+    current = Math.max(0, Math.min(total - 1, current + dir));
+    slides[current].classList.add('active');
+    document.getElementById('counter').textContent = `${current + 1} / ${total}`;
+    document.getElementById('progress').style.width = `${((current + 1) / total) * 100}%`;
+    document.getElementById('prevBtn').disabled = current === 0;
+    document.getElementById('nextBtn').disabled = current === total - 1;
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ') { e.preventDefault(); go(1); }
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')                    { e.preventDefault(); go(-1); }
+  });
+
+  // Init
+  document.getElementById('progress').style.width = `${(1 / total) * 100}%`;
+  document.getElementById('prevBtn').disabled = true;
+</script>
+</body>
+</html>

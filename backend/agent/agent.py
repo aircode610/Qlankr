@@ -526,6 +526,7 @@ async def _stream_graph(
                 "component": c.get("component", "Unknown"),
                 "files_changed": c.get("files_changed", []),
                 "impact_summary": c.get("impact_summary", ""),
+                "impact_detail": c.get("impact_detail"),
                 "risks": c.get("risks", []),
                 "test_suggestions": c.get("test_suggestions", {"skip": [], "run": [], "deeper": []}),
                 "confidence": c.get("confidence", "low"),
@@ -539,7 +540,8 @@ async def _stream_graph(
         yield ResultEvent(
             pr_title=pr_meta.get("title", pr_url),
             pr_url=pr_url,
-            pr_summary=pr_meta.get("description", ""),
+            pr_summary=pr_meta.get("pr_summary") or pr_meta.get("description", ""),
+            pr_summary_detail=pr_meta.get("pr_summary_detail"),
             affected_components=normalized,
             e2e_test_plans=final.get("e2e_test_plans", []),
             agent_steps=final.get("tool_calls_used", 0),

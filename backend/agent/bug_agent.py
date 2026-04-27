@@ -60,8 +60,9 @@ def _coerce_to_bug_report(raw: dict, state: dict) -> BugReport:
                 component=c.get("component", c.get("name", str(c))),
                 files_changed=c.get("files_changed", []),
                 impact_summary=c.get("impact_summary", ""),
+                impact_detail=c.get("impact_detail"),
                 risks=c.get("risks", []),
-                confidence=_SEV_MAP.get(str(c.get("confidence", "low")).lower(), "low"),  # type: ignore[arg-type]
+                confidence=str(c.get("confidence", "low")).lower() if str(c.get("confidence", "low")).lower() in ("high", "medium", "low") else "low",  # type: ignore[arg-type]
             ))
 
     # reproduction_steps: {step_number, action, expected_result} → E2ETestStep
@@ -84,7 +85,7 @@ def _coerce_to_bug_report(raw: dict, state: dict) -> BugReport:
     # Pull supplemental fields from graph state
     triage = state.get("triage") or {}
     environment = str(state.get("environment") or triage.get("environment") or "unspecified")
-    category = str(triage.get("category") or triage.get("bug_type") or "general")
+    category = str(triage.get("bug_category") or triage.get("category") or triage.get("bug_type") or "general")
     expected_behavior = str(triage.get("expected_behavior") or "Not specified")
     actual_behavior = str(triage.get("actual_behavior") or "Not specified")
 
@@ -100,9 +101,11 @@ def _coerce_to_bug_report(raw: dict, state: dict) -> BugReport:
         expected_behavior=expected_behavior,
         actual_behavior=actual_behavior,
         root_cause_analysis=str(raw.get("root_cause") or raw.get("root_cause_analysis") or "Unknown"),
+        root_cause_detail=raw.get("root_cause_detail"),
         affected_components=affected_components,
         evidence=evidence,
         recommendations=[str(r) for r in raw.get("recommendations", [])],
+        recommendation_details=[str(d) for d in raw.get("recommendation_details", [])],
         confidence=confidence,  # type: ignore[arg-type]
         jira_url=raw.get("jira_url"),
     )
@@ -525,8 +528,10 @@ async def _stream_bug_graph(
             s = get_session(thread_id)
             if s is not None and br_parsed is not None:
                 update_session(thread_id, bug_report=br_parsed, current_stage="done")
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[bug_agent] failed to parse bug report: {e}", flush=True)
+            traceback.print_exc()
         if br_parsed is None:
             yield ErrorEvent(message="Bug reproduction completed but report could not be parsed.")
             return

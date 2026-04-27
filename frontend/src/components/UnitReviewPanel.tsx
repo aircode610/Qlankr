@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { CheckCircle, RefreshCw, Send, ChevronDown, ChevronRight, Code } from '@/lib/lucide-icons';
+import { CheckCircle, RefreshCw, Send, ChevronDown, ChevronRight, Code, ExternalLink } from '@/lib/lucide-icons';
 import type { CheckpointData } from '../services/types';
 
 interface UnitReviewPanelProps {
   checkpoint: CheckpointData;
   onApprove: () => void;
   onRefine: (feedback: string) => void;
+  onFileNavigate?: (filePath: string, allFiles?: string[]) => void;
 }
 
 const PRIORITY_STYLES: Record<string, string> = {
@@ -14,7 +15,7 @@ const PRIORITY_STYLES: Record<string, string> = {
   low: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
 };
 
-export const UnitReviewPanel = ({ checkpoint, onApprove, onRefine }: UnitReviewPanelProps) => {
+export const UnitReviewPanel = ({ checkpoint, onApprove, onRefine, onFileNavigate }: UnitReviewPanelProps) => {
   const [feedback, setFeedback] = useState('');
   const [expandedComponents, setExpandedComponents] = useState<Set<number>>(new Set([0]));
 
@@ -90,7 +91,16 @@ export const UnitReviewPanel = ({ checkpoint, onApprove, onRefine }: UnitReviewP
                   <div className="border-t border-border-subtle px-4 pb-3 pt-2">
                     {comp.files_changed.length > 0 && (
                       <div className="mb-2 flex flex-wrap gap-1">
-                        {comp.files_changed.map((f, i) => (
+                        {comp.files_changed.map((f, i) => onFileNavigate ? (
+                          <button
+                            key={i}
+                            onClick={() => onFileNavigate(f, comp.files_changed)}
+                            className="group flex items-center gap-1 font-mono text-[10px] text-accent hover:underline"
+                          >
+                            {f}
+                            <ExternalLink className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
+                          </button>
+                        ) : (
                           <span key={i} className="font-mono text-[10px] text-text-muted">{f}</span>
                         ))}
                       </div>
