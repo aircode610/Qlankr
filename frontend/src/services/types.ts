@@ -76,6 +76,7 @@ export interface AffectedComponent {
   component: string;
   files_changed: string[];
   impact_summary: string;
+  impact_detail?: string;
   risks: string[];
   confidence: 'high' | 'medium' | 'low';
   unit_tests?: UnitTestSpec[];
@@ -86,6 +87,7 @@ export interface AnalyzeResult {
   pr_title: string;
   pr_url: string;
   pr_summary: string;
+  pr_summary_detail?: string;
   affected_components: AffectedComponent[];
   /** Sprint 2 only */
   e2e_test_plans?: E2ETestPlan[];
@@ -196,9 +198,11 @@ export interface BugReport {
   expected_behavior: string;
   actual_behavior: string;
   root_cause_analysis: string;
+  root_cause_detail?: string;
   affected_components: AffectedComponent[];
   evidence: ResearchFindings;
   recommendations: string[];
+  recommendation_details?: string[];
   confidence: Confidence3;
   jira_url?: string;
 }

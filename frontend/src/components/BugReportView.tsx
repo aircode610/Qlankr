@@ -196,11 +196,12 @@ function EvidenceSection({ evidence }: { evidence: ResearchFindings }) {
 interface BugReportViewProps {
   report: BugReport;
   sessionId: string;
+  onFileNavigate?: (filePath: string, allFiles?: string[]) => void;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export const BugReportView = ({ report, sessionId }: BugReportViewProps) => {
+export const BugReportView = ({ report, sessionId, onFileNavigate }: BugReportViewProps) => {
   const [exporting, setExporting] = useState<'markdown' | 'pdf' | 'jira' | null>(null);
   const [jiraUrl, setJiraUrl] = useState<string | null>(report.jira_url ?? null);
 
@@ -299,9 +300,17 @@ export const BugReportView = ({ report, sessionId }: BugReportViewProps) => {
 
           {/* Root cause analysis */}
           <Section title="Root Cause Analysis" copyText={report.root_cause_analysis}>
-            <p className="whitespace-pre-wrap text-xs leading-relaxed text-text-secondary">
+            <p className="text-xs leading-relaxed text-text-secondary">
               {report.root_cause_analysis}
             </p>
+            {report.root_cause_detail && (
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[11px] text-accent hover:underline">Detailed analysis</summary>
+                <p className="mt-1.5 whitespace-pre-wrap rounded border border-border-subtle bg-deep px-3 py-2 text-[11px] leading-relaxed text-text-muted">
+                  {report.root_cause_detail}
+                </p>
+              </details>
+            )}
           </Section>
 
           {/* Evidence */}
@@ -326,12 +335,30 @@ export const BugReportView = ({ report, sessionId }: BugReportViewProps) => {
                     {c.impact_summary && (
                       <p className="mt-1 text-[11px] text-text-muted">{c.impact_summary}</p>
                     )}
+                    {c.impact_detail && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-[10px] text-accent hover:underline">More detail</summary>
+                        <p className="mt-1 text-[11px] leading-relaxed text-text-muted">{c.impact_detail}</p>
+                      </details>
+                    )}
                     {c.files_changed?.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1">
                         {c.files_changed.map((f) => (
-                          <span key={f} className="rounded border border-border-subtle bg-deep px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
-                            {f}
-                          </span>
+                          onFileNavigate ? (
+                            <button
+                              key={f}
+                              onClick={() => onFileNavigate(f, report.affected_components.flatMap((ac) => ac.files_changed ?? []))}
+                              className="group flex items-center gap-1 rounded border border-accent/30 bg-accent/5 px-1.5 py-0.5 font-mono text-[10px] text-accent transition-colors hover:bg-accent/15"
+                              title="View in graph"
+                            >
+                              {f}
+                              <ExternalLink className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
+                            </button>
+                          ) : (
+                            <span key={f} className="rounded border border-border-subtle bg-deep px-1.5 py-0.5 font-mono text-[10px] text-text-muted">
+                              {f}
+                            </span>
+                          )
                         ))}
                       </div>
                     )}
@@ -350,9 +377,19 @@ export const BugReportView = ({ report, sessionId }: BugReportViewProps) => {
             >
               <ul className="flex flex-col gap-2">
                 {report.recommendations.map((r, i) => (
-                  <li key={i} className="flex gap-2 text-xs">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                    <span className="leading-relaxed text-text-secondary">{r}</span>
+                  <li key={i} className="text-xs">
+                    <div className="flex gap-2">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                      <span className="leading-relaxed text-text-secondary">{r}</span>
+                    </div>
+                    {report.recommendation_details?.[i] && (
+                      <details className="ml-5.5 mt-1">
+                        <summary className="cursor-pointer text-[10px] text-accent hover:underline">Details</summary>
+                        <p className="mt-1 rounded border border-border-subtle bg-deep px-2.5 py-1.5 text-[11px] leading-relaxed text-text-muted">
+                          {report.recommendation_details[i]}
+                        </p>
+                      </details>
+                    )}
                   </li>
                 ))}
               </ul>

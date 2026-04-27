@@ -6,7 +6,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from export import export_markdown, export_pdf
-from indexer import get_graph_data, index_repo
+from indexer import get_clone_path, get_graph_data, index_repo
 from agent.sessions import SessionType, get_session
 from agent.tool_health import check_all_integrations, merge_session_credentials
 from models import (
@@ -133,6 +133,36 @@ async def debug_mcp_call(req: _DebugCallRequest):
         )
     raw = await tool_map[req.tool].ainvoke(req.args)
     return {"tool": req.tool, "args": req.args, "result": _unwrap(raw)}
+
+
+@app.get("/file-content/{owner}/{repo}")
+async def file_content(owner: str, repo: str, path: str):
+    """Return the text content of a file from the cloned repo."""
+    import os
+
+    repo_key = f"{owner}/{repo}"
+    clone = get_clone_path(repo_key)
+    if not clone:
+        raise HTTPException(status_code=404, detail="Repo not indexed")
+
+    # Prevent path traversal
+    safe = os.path.normpath(path).lstrip("/")
+    if safe.startswith(".."):
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    full = os.path.join(clone, safe)
+    if not os.path.isfile(full):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    try:
+        with open(full, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Infer language from extension
+    ext = os.path.splitext(safe)[1].lstrip(".")
+    return {"path": safe, "content": content, "language": ext}
 
 
 @app.post("/analyze")

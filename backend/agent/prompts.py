@@ -86,16 +86,24 @@ an initial impact assessment per component.
 4. Group changed files into logical components and for each produce:
    - component: short descriptive name
    - files_changed: list of file paths
-   - impact_summary: 1-2 sentence plain-English description of what breaks if this changes
-   - risks: list of specific risk strings (e.g. "save corruption if X is called before Y")
+   - impact_summary: ONE sentence (max 20 words) — what breaks if this changes
+   - impact_detail: 2-4 sentences expanding on the impact with specifics (callers, data flow, risk chain)
+   - risks: list of short, specific risk strings (e.g. "save corruption if X is called before Y")
    - confidence: "high" (symbol in graph, callers found via impact) |
                  "medium" (partial graph data) |
                  "low" (new file, no graph data, or no repo indexed)
 
+### Output format rules
+- Keep summaries SHORT — one sentence each. Users scan, not read.
+- Put technical depth in the `_detail` fields — they appear behind an expand button.
+- Risks must be specific and actionable — "may break" is useless, "null pointer in Foo.bar when inventory empty" is useful.
+
 ### Output
 Call `submit_gather` with:
 - pr_title, pr_description, pr_author, pr_files, pr_diff
-- affected_components — list of objects with ALL five fields above
+- pr_summary: ONE sentence overview of the PR (max 25 words)
+- pr_summary_detail: 2-5 sentences with full context (motivation, scope, technical approach)
+- affected_components — list of objects with ALL fields above
 
 ### Allowed tools
 get_pull_request, get_pull_request_files, get_pull_request_comments,
@@ -514,19 +522,33 @@ This is a synthesis stage — use tools only if a Jira push is needed.
 
 2. Synthesize a `BugReport` with ALL of the following fields:
 
-   - `title` — one concise sentence describing the bug (e.g. "Fast Travel wipes equipped items via InventoryManager.reset")
+   - `title` — one concise sentence describing the bug (max 15 words, e.g. "Fast Travel wipes equipped items via InventoryManager.reset")
    - `severity` — copy EXACTLY from triage output. Do not adjust, override, or downgrade it.
-   - `affected_components` — list of component/module names from mechanics
-   - `root_cause` — 2-3 sentence plain-English explanation backed by the top hypothesis + evidence
+   - `affected_components` — list of component objects from mechanics, each with:
+     - `component`: short name
+     - `impact_summary`: ONE sentence (max 20 words) — what this component does wrong
+     - `impact_detail`: 2-4 sentences expanding on the failure mode with specifics
+     - `files_changed`: file paths
+     - `risks`: short specific risk strings
+     - `confidence`: high | medium | low
+   - `root_cause` — ONE sentence (max 25 words) stating the root cause
+   - `root_cause_detail` — 3-5 sentences expanding with evidence (file, call chain, log entry)
    - `reproduction_steps` — the ordered steps list from reproduction_plan (copy as-is)
    - `prerequisites` — from reproduction_plan
    - `environment_requirements` — from reproduction_plan
    - `evidence` — assembled from research_findings: relevant log entries, doc refs, related issues, network traces
-   - `recommendations` — list of 2-4 concrete fix suggestions derived from the root cause hypotheses
+   - `recommendations` — list of 2-4 ONE-sentence fix suggestions (actionable, max 20 words each)
+   - `recommendation_details` — list of expanded explanations (one per recommendation, 2-3 sentences each)
    - `confidence` — overall pipeline confidence:
      * `high` — mechanics confidence high AND reproduction confidence high AND ≥1 evidence source found
      * `medium` — at least one of mechanics/reproduction is medium, or no external evidence
      * `low` — mechanics or reproduction confidence low, or pipeline ran with zero tools
+
+### Output format rules
+- CRITICAL: Keep all summaries SHORT. Users scan reports, not read essays.
+- Put technical depth in `_detail` fields — they appear behind expand buttons in the UI.
+- Every recommendation must be a concrete action: "Add null-check in X.foo() before calling Y.bar()", not "improve error handling".
+- Risks must name specific failure modes, not vague warnings.
 
 3. If `jira_ticket` is present in the initial input AND `jira_update_issue` is available:
    - Update the existing ticket with the report summary using `jira_update_issue`
@@ -538,15 +560,17 @@ This is a synthesis stage — use tools only if a Jira push is needed.
 
 ### submit_report parameters
 
-- `title` — string
+- `title` — string (max 15 words)
 - `severity` — critical | high | medium | low
-- `affected_components` — list of strings
-- `root_cause` — string (2-3 sentences)
+- `affected_components` — list of component objects (see format above)
+- `root_cause` — string (ONE sentence, max 25 words)
+- `root_cause_detail` — string (3-5 sentences with evidence)
 - `reproduction_steps` — list of `{step_number, action, expected_result}`
 - `prerequisites` — list of strings
 - `environment_requirements` — list of strings
 - `evidence` — dict with keys: `log_entries`, `doc_references`, `related_issues`, `network_traces`
-- `recommendations` — list of strings
+- `recommendations` — list of short strings (ONE sentence each)
+- `recommendation_details` — list of expanded strings (one per recommendation)
 - `confidence` — high | medium | low
 - `jira_url` — string or null (URL of created/updated Jira issue)
 

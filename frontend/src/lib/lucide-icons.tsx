@@ -61,4 +61,10 @@ export {
   ArrowUpRight,
   ToggleLeft,
   ToggleRight,
+  PanelRightClose,
+  PanelRight,
+  Link,
+  Info,
+  Minus,
+  Plus,
 } from 'lucide-react';
