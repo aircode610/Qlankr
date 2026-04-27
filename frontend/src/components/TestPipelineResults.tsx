@@ -158,7 +158,7 @@ const ComponentResultCard = ({ component }: { component: AffectedComponent }) =>
           )}
 
           {/* Sprint 2: Unit / Integration tabs */}
-          {(component.unit_tests?.length > 0 || component.integration_tests?.length > 0) && (
+          {((component.unit_tests?.length ?? 0) > 0 || (component.integration_tests?.length ?? 0) > 0) && (
             <>
               <div className="mb-2 flex gap-1 border-b border-border-subtle pb-2">
                 <button onClick={() => setActiveTab('unit')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'unit' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>

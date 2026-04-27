@@ -54,4 +54,11 @@ export {
   Zap,
   ZoomIn,
   ZoomOut,
+  Settings2,
+  Download,
+  FileText,
+  ExternalLink,
+  ArrowUpRight,
+  ToggleLeft,
+  ToggleRight,
 } from 'lucide-react';

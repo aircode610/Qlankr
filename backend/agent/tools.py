@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 from typing import Any
@@ -118,12 +119,29 @@ JIRA_TOOL_ALIASES: dict[str, str] = {
     "get_comments": "jira_get_comments",
 }
 
+NOTION_TOOL_ALIASES: dict[str, str] = {
+    "search": "notion_search",
+    "get_page": "notion_get_page",
+    "get_database": "notion_get_database",
+}
+
+CONFLUENCE_TOOL_ALIASES: dict[str, str] = {
+    "search_pages": "confluence_search",
+    "get_page_content": "confluence_get_page",
+}
+
+ALL_TOOL_ALIASES: dict[str, str] = {
+    **JIRA_TOOL_ALIASES,
+    **NOTION_TOOL_ALIASES,
+    **CONFLUENCE_TOOL_ALIASES,
+}
+
 
 def _normalize_tool_names(tools: list) -> list:
-    """Map community MCP tool names to canonical jira_* names for stage filters."""
+    """Map community MCP tool names to canonical names for stage filters."""
     out: list = []
     for t in tools:
-        canonical = JIRA_TOOL_ALIASES.get(t.name, t.name)
+        canonical = ALL_TOOL_ALIASES.get(t.name, t.name)
         if canonical == t.name:
             out.append(t)
             continue
@@ -164,12 +182,12 @@ def _server_config() -> dict:
             },
         },
     }
-    # Jira (Atlassian) MCP — Person 3; only if cloud credentials are present
+    # Jira — mcp-atlassian Python package (pip install mcp-atlassian)
     if os.environ.get("JIRA_URL") and os.environ.get("JIRA_API_TOKEN"):
         config["jira"] = {
             "transport": "stdio",
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-atlassian"],
+            "command": "mcp-atlassian",
+            "args": [],
             "env": {
                 **utf8_env,
                 "JIRA_URL": os.environ["JIRA_URL"],
@@ -185,6 +203,72 @@ def _server_config() -> dict:
             "args": ["mcp"],
             "env": utf8_env,
         }
+
+    # ── Sprint 3 external integrations ──────────────────────────────────────
+    # Notion — official MCP server (stdio)
+    if os.environ.get("NOTION_API_KEY"):
+        config["notion"] = {
+            "transport": "stdio",
+            "command": "npx",
+            "args": ["-y", "@notionhq/notion-mcp-server"],
+            "env": {
+                **utf8_env,
+                "OPENAPI_MCP_HEADERS": json.dumps({
+                    "Authorization": f"Bearer {os.environ['NOTION_API_KEY']}",
+                    "Notion-Version": "2022-06-28",
+                }),
+            },
+        }
+    # Confluence — mcp-atlassian Python package (same package as Jira, separate entry)
+    if os.environ.get("CONFLUENCE_URL") and os.environ.get("CONFLUENCE_TOKEN"):
+        config["confluence"] = {
+            "transport": "stdio",
+            "command": "mcp-atlassian",
+            "args": [],
+            "env": {
+                **utf8_env,
+                "CONFLUENCE_URL": os.environ["CONFLUENCE_URL"],
+                "CONFLUENCE_TOKEN": os.environ["CONFLUENCE_TOKEN"],
+                "CONFLUENCE_SPACE_KEY": os.environ.get("CONFLUENCE_SPACE_KEY", ""),
+            },
+        }
+    # Grafana — custom Python MCP server
+    if os.environ.get("GRAFANA_URL") and os.environ.get("GRAFANA_API_KEY"):
+        config["grafana"] = {
+            "transport": "stdio",
+            "command": "python",
+            "args": ["-m", "mcp_servers.grafana_server"],
+            "env": {
+                **utf8_env,
+                "GRAFANA_URL": os.environ["GRAFANA_URL"],
+                "GRAFANA_API_KEY": os.environ["GRAFANA_API_KEY"],
+            },
+        }
+    # Kibana — custom Python MCP server (queries Elasticsearch behind Kibana)
+    if os.environ.get("KIBANA_URL") and os.environ.get("KIBANA_TOKEN"):
+        config["kibana"] = {
+            "transport": "stdio",
+            "command": "python",
+            "args": ["-m", "mcp_servers.kibana_server"],
+            "env": {
+                **utf8_env,
+                "KIBANA_URL": os.environ["KIBANA_URL"],
+                "KIBANA_TOKEN": os.environ["KIBANA_TOKEN"],
+            },
+        }
+    # Postman — custom Python MCP server
+    if os.environ.get("POSTMAN_API_KEY"):
+        config["postman"] = {
+            "transport": "stdio",
+            "command": "python",
+            "args": ["-m", "mcp_servers.postman_server"],
+            "env": {
+                **utf8_env,
+                "POSTMAN_API_KEY": os.environ["POSTMAN_API_KEY"],
+                "POSTMAN_WORKSPACE_ID": os.environ.get("POSTMAN_WORKSPACE_ID", ""),
+            },
+        }
+
     return config
 
 
@@ -197,6 +281,15 @@ def get_mcp_client() -> MultiServerMCPClient:
             tools = await client.get_tools()
     """
     return MultiServerMCPClient(_server_config())
+
+
+def get_available_integrations() -> list[str]:
+    """Return names of configured integrations. Called at pipeline startup."""
+    config = _server_config()
+    known = ["jira", "notion", "confluence", "grafana", "kibana", "postman"]
+    available = [name for name in known if name in config]
+    available.append("sniffer")  # always available (local tools, no credentials needed)
+    return available
 
 
 def safe_tools(tools: list) -> list:

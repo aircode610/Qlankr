@@ -17,6 +17,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BUG_BASE_PROMPT, BUG_RESEARCH_PROMPT
+from agent.sniffer import make_sniffer_tools
 from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
 
 if TYPE_CHECKING:
@@ -38,6 +39,7 @@ async def research_node(state: "BugReproductionState", llm: Any = None, client: 
     if _own_client:
         print(f"[bug_research] got {len(all_tools)} tools, filtering to bug_research stage...", flush=True)
     stage_tools = safe_tools(filter_tools(all_tools, "bug_research"))
+    stage_tools += make_sniffer_tools()
 
     available_tool_names = {t.name for t in stage_tools}
 

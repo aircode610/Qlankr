@@ -1,6 +1,6 @@
-import { Zap, Layers, GitPullRequest, Loader2, Settings2 } from '@/lib/lucide-icons';
+import { Zap, Layers, GitPullRequest, Loader2, Settings2, Bug } from '@/lib/lucide-icons';
 
-export type AppView = 'graph' | 'analyze' | 'settings';
+export type AppView = 'graph' | 'analyze' | 'bug' | 'settings';
 
 interface NavbarProps {
   view: AppView;
@@ -8,9 +8,10 @@ interface NavbarProps {
   repoName: string | null;
   analyzing: boolean;
   activeWorkflowLabel: string | null;
+  bugAnalyzing?: boolean;
 }
 
-export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflowLabel }: NavbarProps) => (
+export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflowLabel, bugAnalyzing }: NavbarProps) => (
   <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface px-4">
     {/* Brand */}
     <div className="flex items-center gap-2">
@@ -67,6 +68,20 @@ export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflow
         Analyze
         {analyzing && (
           <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-accent" />
+        )}
+      </button>
+      <button
+        onClick={() => onViewChange('bug')}
+        className={`relative flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+          view === 'bug'
+            ? 'bg-surface text-text-primary shadow-sm'
+            : 'text-text-muted hover:text-text-secondary'
+        }`}
+      >
+        <Bug className="h-3.5 w-3.5" />
+        Bug
+        {bugAnalyzing && (
+          <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-red-400" />
         )}
       </button>
       <button
