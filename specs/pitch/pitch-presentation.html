@@ -47,6 +47,7 @@
     pointer-events: none;
     transition: opacity 0.5s ease;
     text-align: center;
+    overflow: auto;
   }
   .slide.active {
     opacity: 1;
@@ -125,6 +126,8 @@
     gap: 20px;
     width: 100%;
     max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
   }
   .card-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
   .card-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
@@ -162,6 +165,8 @@
     flex-wrap: nowrap;
     width: 100%;
     max-width: 1000px;
+    margin-left: auto;
+    margin-right: auto;
   }
   .flow-step {
     flex: 1;
@@ -245,6 +250,16 @@
   }
   .img-placeholder .ph-icon { font-size: 32px; opacity: 0.5; }
 
+  .screenshot {
+    width: 100%;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    object-fit: contain;
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
   /* ── Graph node viz ── */
   .graph-demo {
     position: relative;
@@ -276,6 +291,8 @@
     align-items: center;
     width: 100%;
     max-width: 1100px;
+    margin-left: auto;
+    margin-right: auto;
   }
   .two-col .left { text-align: left; }
   .two-col .right { text-align: left; }
@@ -318,8 +335,8 @@
   .gap-sm { gap: 12px; }
   .gap-md { gap: 20px; }
   .w-full  { width: 100%; }
-  .mw-900  { max-width: 900px; }
-  .mw-1100 { max-width: 1100px; }
+  .mw-900  { max-width: 900px; margin-left: auto; margin-right: auto; }
+  .mw-1100 { max-width: 1100px; margin-left: auto; margin-right: auto; }
   .flex    { display: flex; }
   .flex-col { flex-direction: column; }
   .items-start { align-items: flex-start; }
@@ -456,17 +473,21 @@
         </ul>
       </div>
     </div>
-    <!-- PRODUCT SCREENSHOT PLACEHOLDER -->
-    <div class="img-placeholder mt-20" style="width:100%;max-width:1100px;height:120px;">
-      <div class="ph-icon">🖥️</div>
-      <span>[ Screenshot: Dashboard — Impact Analysis input + live agent trace feed ]</span>
-    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════════════════ -->
-  <!-- SLIDE 6 — INDEXING / KNOWLEDGE GRAPH                    -->
+  <!-- SLIDE 5 — KNOWLEDGE GRAPH VISUALIZATION                  -->
   <!-- ═══════════════════════════════════════════════════════ -->
   <div class="slide" id="s5">
+    <div class="label">Knowledge Graph</div>
+    <h2>Your codebase, <span class="gradient-text">visualized</span></h2>
+    <img src="graph.png" alt="Knowledge Graph Canvas" class="screenshot" style="margin-top:32px;max-width:1100px;max-height:70vh;">
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- SLIDE 6 — INDEXING / KNOWLEDGE GRAPH TOOLS               -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="slide" id="s6">
     <div class="label">Technical Depth · Indexing</div>
     <h2>A <span class="gradient-text">Knowledge Graph</span> that understands your game code</h2>
     <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
@@ -531,7 +552,7 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 7 — IMPACT ANALYSIS AGENT WORKFLOW                -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s6">
+  <div class="slide" id="s7">
     <div class="label">Technical Depth · Agent Design</div>
     <h2>Impact Analysis: <span class="gradient-text">LangGraph ReAct</span> with human-in-the-loop</h2>
     <div class="flow mt-32">
@@ -579,17 +600,13 @@
         <p style="font-size:13px;">Structured <code style="color:var(--cyan);">AnalyzeResponse</code>: affected components, unit test specs, integration touchpoints, E2E scenarios — each with confidence scores.</p>
       </div>
     </div>
-    <!-- PRODUCT SCREENSHOT PLACEHOLDER -->
-    <div class="img-placeholder mt-20" style="width:100%;max-width:1000px;height:90px;">
-      <div class="ph-icon">🖥️</div>
-      <span>[ Screenshot: Unit Review Panel — component list, test cases, approve / refine UI ]</span>
-    </div>
+    <img src="pr analyze.png" alt="Impact Analysis UI" class="screenshot mt-20" style="max-width:1100px;">
   </div>
 
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 8 — BUG REPRODUCTION AGENT WORKFLOW               -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s7">
+  <div class="slide" id="s8">
     <div class="label">Technical Depth · Agent Design</div>
     <h2>Bug Reproduction: <span class="gradient-text">5-stage pipeline</span> with evidence gathering</h2>
     <div class="flow mt-20" style="max-width:1100px;">
@@ -650,7 +667,7 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 9 — MCP INTEGRATIONS                              -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s8">
+  <div class="slide" id="s9">
     <div class="label">Technical Depth · Integrations</div>
     <h2>MCP: <span class="gradient-text">Plug into every tool</span> studios already use</h2>
     <div class="two-col mt-20" style="max-width:1100px;align-items:start;">
@@ -737,7 +754,7 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 10 — EVALUATION & ITERATION                       -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s9">
+  <div class="slide" id="s10">
     <div class="label">Technical Depth · Evaluation</div>
     <h2>Built to <span class="gradient-text">get better</span> — not just run once</h2>
     <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
@@ -783,6 +800,7 @@
           <div class="label" style="margin-bottom:10px;">Budget exhaustion graceful fallback</div>
           <p style="font-size:14px;">If a stage hits its tool call limit without completing, a forced-submit agent captures all accumulated context and produces a partial result — with confidence marked <code style="color:var(--red);">low</code>. No silent failures.</p>
         </div>
+        <img src="eval.png" alt="LangSmith Evaluation Dashboard" class="screenshot" style="margin-top:16px;">
       </div>
     </div>
   </div>
@@ -790,15 +808,12 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 11 — DEMO / PRODUCT WALKTHROUGH                   -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s10">
+  <div class="slide" id="s11">
     <div class="label">Product Demo</div>
     <h2>See it in action — <span class="gradient-text">end-to-end</span></h2>
     <div class="card-grid cols-2 mt-32" style="max-width:1100px;">
       <div>
-        <div class="img-placeholder" style="height:240px;margin-bottom:12px;">
-          <div class="ph-icon">🔬</div>
-          <span>[ Screenshot: Impact Analysis — PR URL input, live agent step trace, affected components list ]</span>
-        </div>
+        <img src="pr analyze.png" alt="Impact Analysis UI" class="screenshot" style="margin-bottom:12px;">
         <div class="card" style="text-align:left;">
           <h3 style="color:var(--accent2);margin-bottom:8px;">Impact Analysis Flow</h3>
           <ol style="padding-left:18px;font-size:13px;color:var(--muted);line-height:1.8;">
@@ -811,10 +826,7 @@
         </div>
       </div>
       <div>
-        <div class="img-placeholder" style="height:240px;margin-bottom:12px;">
-          <div class="ph-icon">🐛</div>
-          <span>[ Screenshot: Bug Report View — reproduction steps, evidence tabs (Logs/Docs/Issues), confidence badge ]</span>
-        </div>
+        <img src="bug reproduction.png" alt="Bug Reproduction UI" class="screenshot" style="margin-bottom:12px;">
         <div class="card" style="text-align:left;">
           <h3 style="color:var(--cyan);margin-bottom:8px;">Bug Reproduction Flow</h3>
           <ol style="padding-left:18px;font-size:13px;color:var(--muted);line-height:1.8;">
@@ -832,7 +844,7 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 12 — TECHNICAL ARCHITECTURE SUMMARY               -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s11">
+  <div class="slide" id="s12">
     <div class="label">Architecture</div>
     <h2>Full-stack, <span class="gradient-text">production-grade</span> system design</h2>
     <div class="two-col mt-32" style="max-width:1100px;align-items:start;">
@@ -860,11 +872,6 @@
         </div>
       </div>
       <div class="right">
-        <!-- Architecture diagram placeholder -->
-        <div class="img-placeholder" style="height:220px;margin-bottom:16px;">
-          <div class="ph-icon">🏗️</div>
-          <span>[ Screenshot: Settings panel — integration health status, credentials, green/red indicators ]</span>
-        </div>
         <div class="card">
           <div class="label" style="margin-bottom:10px;">Key design decisions</div>
           <table style="width:100%;font-size:12px;border-collapse:collapse;">
@@ -891,44 +898,35 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════════════ -->
-  <!-- SLIDE 13 — WHAT WE BUILT (MVP SCOPE)                    -->
+  <!-- SLIDE 13 — TRADE-OFFS                                    -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s12">
-    <div class="label">What We Built</div>
-    <h2>From <span class="gradient-text">zero to working product</span> — MVP and beyond</h2>
-    <div class="card-grid cols-2 mt-32" style="max-width:1000px;">
+  <div class="slide" id="s13">
+    <div class="label">Engineering Trade-offs</div>
+    <h2>Decisions that <span class="gradient-text">shaped the system</span></h2>
+    <div class="card-grid cols-2 mt-32" style="max-width:1100px;">
+      <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
+        <h3 style="font-size:15px;color:var(--accent2);margin-bottom:8px;">Per-stage agents vs one mega-agent</h3>
+        <p style="font-size:13px;">5 separate ReAct agents, each with filtered tools and a hard call budget. One agent can't enforce per-stage limits and picks wrong tools when the list grows too large. Tradeoff: more LLM calls — mitigated with Haiku for light stages.</p>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(6,182,212,0.3);">
+        <h3 style="font-size:15px;color:var(--cyan);margin-bottom:8px;">pre_model_hook for context truncation</h3>
+        <p style="font-size:13px;">GitHub MCP outputs hit 200k+ tokens. Wrapping tool coroutines silently failed for MCP tools. Fixed with a LangGraph pre_model_hook that truncates ToolMessages before every LLM call — guaranteed to fire regardless of tool execution path.</p>
+      </div>
       <div class="card" style="text-align:left;border-color:rgba(34,197,94,0.3);">
-        <h3 style="color:var(--green);margin-bottom:16px;">✅ MVP (Core 5 stories)</h3>
-        <ul class="check" style="display:flex;flex-direction:column;gap:8px;">
-          <li>Impact analysis on PR — end-to-end</li>
-          <li>Bug report input (plain text)</li>
-          <li>Mechanics &amp; component analysis</li>
-          <li>Research support (logs, DB, docs, admins)</li>
-          <li>Structured developer-ready bug reports</li>
-        </ul>
+        <h3 style="font-size:15px;color:var(--green);margin-bottom:8px;">Hard budget enforcement via stream break</h3>
+        <p style="font-size:13px;">We break the stream at the tool limit — the model can't be trusted to self-stop. This leaves dangling tool_call IDs with no matching ToolMessages, so we patch them with synthetic messages before the forced-submit agent runs.</p>
+      </div>
+      <div class="card" style="text-align:left;border-color:rgba(245,158,11,0.3);">
+        <h3 style="font-size:15px;color:var(--yellow);margin-bottom:8px;">Shared MCP client across all stages</h3>
+        <p style="font-size:13px;">One client reused for all 5 stages instead of spawning per stage — saves ~2-3s cold start each. Tradeoff: a crash in one stage can affect subsequent ones, but the whole session fails anyway.</p>
       </div>
       <div class="card" style="text-align:left;border-color:rgba(99,102,241,0.3);">
-        <h3 style="color:var(--accent2);margin-bottom:16px;">🚀 Also delivered (post-MVP)</h3>
-        <ul class="check" style="display:flex;flex-direction:column;gap:8px;">
-          <li>Bug report export (Markdown + PDF)</li>
-          <li>Jira integration — auto create/update issues</li>
-          <li>Confluence &amp; Notion documentation search</li>
-          <li>Grafana + Kibana log querying</li>
-          <li>Traceability — full agent step audit trail</li>
-          <li>Confidence scoring on all outputs</li>
-          <li>Knowledge graph visualization</li>
-        </ul>
+        <h3 style="font-size:15px;color:var(--accent2);margin-bottom:8px;">LangGraph over custom orchestration</h3>
+        <p style="font-size:13px;">Free checkpointing (MemorySaver), resume, and LangSmith tracing. Cost: recursion limit counts every node including hooks — a non-obvious footgun that caused GraphRecursionError in forced-submit fallback.</p>
       </div>
-    </div>
-    <div class="card mt-20" style="max-width:1000px;">
-      <div style="display:flex;gap:20px;flex-wrap:wrap;justify-content:center;">
-        <span class="tag tag-purple">LangGraph agent orchestration</span>
-        <span class="tag tag-cyan">8+ MCP integrations</span>
-        <span class="tag tag-green">GitNexus knowledge graph</span>
-        <span class="tag tag-yellow">SSE streaming UI</span>
-        <span class="tag tag-purple">Human-in-the-loop checkpoints</span>
-        <span class="tag tag-cyan">LangSmith evaluation</span>
-        <span class="tag tag-green">Custom MCP servers</span>
+      <div class="card" style="text-align:left;border-color:rgba(6,182,212,0.3);">
+        <h3 style="font-size:15px;color:var(--cyan);margin-bottom:8px;">GitHub-only fallback without indexing</h3>
+        <p style="font-size:13px;">Agent works without repo indexing — reads raw files via GitHub MCP. No call graph means no cross-file dependency tracing, so output confidence is lower. You shouldn't need to index to get something useful.</p>
       </div>
     </div>
   </div>
@@ -936,7 +934,7 @@
   <!-- ═══════════════════════════════════════════════════════ -->
   <!-- SLIDE 14 — CLOSING / VISION                             -->
   <!-- ═══════════════════════════════════════════════════════ -->
-  <div class="slide" id="s13">
+  <div class="slide" id="s14">
     <div class="glow" style="width:600px;height:600px;background:rgba(99,102,241,0.1);top:-200px;right:-200px;"></div>
     <div class="glow" style="width:400px;height:400px;background:rgba(6,182,212,0.08);bottom:-100px;left:-100px;"></div>
 
@@ -973,7 +971,7 @@
 <!-- Navigation -->
 <div id="nav">
   <button id="prevBtn" onclick="go(-1)">←</button>
-  <span id="counter">1 / 13</span>
+  <span id="counter">1 / 14</span>
   <button id="nextBtn" onclick="go(1)">→</button>
 </div>
 
