@@ -212,6 +212,23 @@ const AppContent = () => {
     }
   }, [graph, setSelectedNode, setAffectedFileIds]);
 
+  /* ── Open a cached (already-indexed) repo without re-indexing ── */
+  const handleOpenCached = useCallback(async (repoKey: string) => {
+    const [owner, repo] = repoKey.split('/');
+    setRepoUrl(`https://github.com/${repoKey}`);
+    setIndexing(false);
+    try {
+      const { nodes, relationships } = await getGraph(owner, repo);
+      const kg = createKnowledgeGraph();
+      nodes.forEach((n) => kg.addNode(n));
+      relationships.forEach((r) => kg.addRelationship(r));
+      setGraph(kg);
+    } catch (err) {
+      console.warn('Failed to load graph for cached repo:', err);
+    }
+    setIndexed(true);
+  }, [setRepoUrl, setIndexing, setIndexed, setGraph]);
+
   /* ── Repo indexing ──────────────────────────────────────────── */
   const handleIndex = useCallback(async (url: string) => {
     setRepoUrl(url);
@@ -553,6 +570,7 @@ const AppContent = () => {
     return (
       <IndexingPage
         onIndex={handleIndex}
+        onOpenCached={handleOpenCached}
         indexing={indexing}
         indexed={indexed}
         indexMessages={indexMessages}

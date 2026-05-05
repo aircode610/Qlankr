@@ -6,7 +6,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from export import export_markdown, export_pdf
-from indexer import get_clone_path, get_graph_data, index_repo
+from indexer import get_clone_path, get_graph_data, index_repo, list_indexed_repos
 from agent.sessions import SessionType, get_session
 from agent.tool_health import check_all_integrations, merge_session_credentials
 from models import (
@@ -57,6 +57,12 @@ async def index(request: IndexRequest):
         stream_response(index_repo(request.repo_url)),
         media_type="text/event-stream",
     )
+
+
+@app.get("/repos")
+async def get_repos():
+    """List all repos that have been indexed (persists across page reloads)."""
+    return {"repos": list_indexed_repos()}
 
 
 @app.get("/graph/{owner}/{repo}")

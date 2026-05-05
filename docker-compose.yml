@@ -16,6 +16,9 @@ services:
       - LANGCHAIN_API_KEY=${LANGSMITH_API_KEY}
       - LANGCHAIN_ENDPOINT=${LANGSMITH_ENDPOINT}
       - LANGCHAIN_PROJECT=${LANGSMITH_PROJECT:-qlankr}
+    volumes:
+      - ./backend:/app          # live-reload Python changes without rebuild
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
     build:
@@ -27,6 +30,9 @@ services:
       - .env
     environment:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+    volumes:
+      - ./frontend:/app/frontend          # live HMR for TS/TSX changes
+      - /app/frontend/node_modules        # keep container's node_modules
     depends_on:
       - backend
 
