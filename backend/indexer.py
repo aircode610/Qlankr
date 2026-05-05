@@ -100,7 +100,7 @@ async def index_repo(
     yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze?")
     try:
         proc = await asyncio.create_subprocess_exec(
-            "gitnexus", "analyze", "--embeddings", clone_path,
+            "gitnexus", "analyze", clone_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=clone_path,

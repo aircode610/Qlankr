@@ -160,6 +160,13 @@ export async function getGraph(owner: string, repo: string): Promise<NormalisedG
   return normaliseBackendGraph(raw);
 }
 
+/** Fetch file content from the indexed repo */
+export async function getFileContent(owner: string, repo: string, path: string): Promise<{ path: string; content: string; language: string }> {
+  const response = await fetch(buildUrl(`/file-content/${owner}/${repo}?path=${encodeURIComponent(path)}`));
+  if (!response.ok) throw new Error(await readErrorText(response));
+  return (await response.json()) as { path: string; content: string; language: string };
+}
+
 /** Index a repo — SSE stream */
 export interface IndexCallbacks {
   signal?: AbortSignal;

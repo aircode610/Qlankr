@@ -42,13 +42,15 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
     class _ReportOutput(BaseModel):
         title: str
         severity: str
-        affected_components: list[str] = Field(default_factory=list)
+        affected_components: list = Field(default_factory=list)
         root_cause: str
+        root_cause_detail: str | None = None
         reproduction_steps: list[dict] = Field(default_factory=list)
         prerequisites: list[str] = Field(default_factory=list)
         environment_requirements: list[str] = Field(default_factory=list)
         evidence: dict = Field(default_factory=dict)
         recommendations: list[str] = Field(default_factory=list)
+        recommendation_details: list[str] = Field(default_factory=list)
         confidence: str = "low"
         jira_url: str | None = None
 
@@ -60,11 +62,13 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
         root_cause: str,
         confidence: str,
         affected_components: list = [],
+        root_cause_detail: str | None = None,
         reproduction_steps: list = [],
         prerequisites: list = [],
         environment_requirements: list = [],
         evidence: dict = {},
         recommendations: list = [],
+        recommendation_details: list = [],
         jira_url: str | None = None,
     ) -> str:
         results.append(_ReportOutput(
@@ -72,11 +76,13 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
             severity=severity,
             affected_components=affected_components,
             root_cause=root_cause,
+            root_cause_detail=root_cause_detail,
             reproduction_steps=reproduction_steps,
             prerequisites=prerequisites,
             environment_requirements=environment_requirements,
             evidence=evidence,
             recommendations=recommendations,
+            recommendation_details=recommendation_details,
             confidence=confidence,
             jira_url=jira_url,
         ))
@@ -87,15 +93,19 @@ async def report_node(state: "BugReproductionState", llm: Any = None, client: An
         name="submit_report",
         description=(
             "Submit the completed bug report. "
-            "Pass: title (one sentence describing the bug), "
+            "Pass: title (one sentence describing the bug, max 15 words), "
             "severity (critical|high|medium|low), "
-            "affected_components (list of component name strings), "
-            "root_cause (2-3 sentence explanation grounded in evidence), "
+            "affected_components (list of component objects, each with: "
+            "component (str), impact_summary (ONE sentence), impact_detail (2-4 sentences), "
+            "files_changed ([str]), risks ([str]), confidence (high|medium|low)), "
+            "root_cause (ONE sentence, max 25 words, grounded in evidence), "
+            "root_cause_detail (3-5 sentences expanding with file, call chain, or log evidence), "
             "reproduction_steps (list of {step_number, action, expected_result}), "
             "prerequisites (list of setup condition strings), "
             "environment_requirements (list of platform/build requirement strings), "
             "evidence (dict with keys: log_entries, doc_references, related_issues, network_traces), "
-            "recommendations (list of 2-4 actionable fix suggestion strings), "
+            "recommendations (list of 2-4 ONE-sentence actionable fix suggestions), "
+            "recommendation_details (list of expanded explanations, one per recommendation, 2-3 sentences each), "
             "confidence (high|medium|low), "
             "jira_url (URL string if a Jira issue was created/updated, otherwise null)."
         ),

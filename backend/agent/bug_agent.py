@@ -15,27 +15,100 @@ import asyncio
 import os
 import re
 import traceback
-from typing import Any, AsyncIterator, Literal
+from typing import Any, AsyncIterator
 from uuid import uuid4
 
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field
 
 from agent.agent import BugReproductionState, _extract_owner_repo
 from indexer import get_repo_name
-from models import AgentStepEvent, CheckpointEvent, ErrorEvent, StageChangeEvent, BugReport
+from models import (
+    AgentStepEvent, AffectedComponent, BugCheckpointEvent, BugReport,
+    BugReportResultEvent, BugStageChangeEvent, E2ETestStep, ErrorEvent,
+    ResearchFindings,
+)
 
-# ── Bug result event ──────────────────────────────────────────────────────────
-# Temporary definition — move to models.py when P3 defines BugReportResultEvent.
+# Alias for internal use
+BugResultEvent = BugReportResultEvent
 
-class BugResultEvent(BaseModel):
-    type: Literal["bug_result"] = "bug_result"
-    session_id: str
-    bug_report: dict
-    full_state: dict = Field(default_factory=dict)
+# Severity values the LLM uses vs what BugReport accepts
+_SEV_MAP: dict[str, str] = {
+    "critical": "critical",
+    "high":     "major",
+    "major":    "major",
+    "medium":   "minor",
+    "minor":    "minor",
+    "low":      "trivial",
+    "trivial":  "trivial",
+}
+
+
+def _coerce_to_bug_report(raw: dict, state: dict) -> BugReport:
+    """Map the raw submit_report dict (from bug_report.py) to a valid BugReport."""
+    severity = _SEV_MAP.get(str(raw.get("severity", "minor")).lower(), "minor")
+
+    # affected_components: list[str | dict] → list[AffectedComponent]
+    affected_components: list[AffectedComponent] = []
+    for c in raw.get("affected_components", []):
+        if isinstance(c, str):
+            affected_components.append(AffectedComponent(component=c))
+        elif isinstance(c, dict):
+            affected_components.append(AffectedComponent(
+                component=c.get("component", c.get("name", str(c))),
+                files_changed=c.get("files_changed", []),
+                impact_summary=c.get("impact_summary", ""),
+                impact_detail=c.get("impact_detail"),
+                risks=c.get("risks", []),
+                confidence=str(c.get("confidence", "low")).lower() if str(c.get("confidence", "low")).lower() in ("high", "medium", "low") else "low",  # type: ignore[arg-type]
+            ))
+
+    # reproduction_steps: {step_number, action, expected_result} → E2ETestStep
+    reproduction_steps: list[E2ETestStep] = []
+    for i, s in enumerate(raw.get("reproduction_steps", []), start=1):
+        if isinstance(s, dict):
+            reproduction_steps.append(E2ETestStep(
+                step=int(s.get("step_number", s.get("step", i))),
+                action=str(s.get("action", "")),
+                expected=str(s.get("expected_result", s.get("expected", ""))),
+            ))
+
+    # evidence: raw dict → ResearchFindings (best-effort)
+    raw_ev = raw.get("evidence", {})
+    try:
+        evidence = ResearchFindings.model_validate(raw_ev) if isinstance(raw_ev, dict) else ResearchFindings()
+    except Exception:
+        evidence = ResearchFindings()
+
+    # Pull supplemental fields from graph state
+    triage = state.get("triage") or {}
+    environment = str(state.get("environment") or triage.get("environment") or "unspecified")
+    category = str(triage.get("bug_category") or triage.get("category") or triage.get("bug_type") or "general")
+    expected_behavior = str(triage.get("expected_behavior") or "Not specified")
+    actual_behavior = str(triage.get("actual_behavior") or "Not specified")
+
+    confidence_raw = str(raw.get("confidence", "low")).lower()
+    confidence = confidence_raw if confidence_raw in ("high", "medium", "low") else "low"
+
+    return BugReport(
+        title=str(raw.get("title") or "Untitled Bug"),
+        severity=severity,  # type: ignore[arg-type]
+        category=category,
+        environment=environment,
+        reproduction_steps=reproduction_steps,
+        expected_behavior=expected_behavior,
+        actual_behavior=actual_behavior,
+        root_cause_analysis=str(raw.get("root_cause") or raw.get("root_cause_analysis") or "Unknown"),
+        root_cause_detail=raw.get("root_cause_detail"),
+        affected_components=affected_components,
+        evidence=evidence,
+        recommendations=[str(r) for r in raw.get("recommendations", [])],
+        recommendation_details=[str(d) for d in raw.get("recommendation_details", [])],
+        confidence=confidence,  # type: ignore[arg-type]
+        jira_url=raw.get("jira_url"),
+    )
 
 
 # ── LLM singletons ────────────────────────────────────────────────────────────
@@ -269,7 +342,7 @@ async def run_bug_agent(
     attachments: list[str] | None = None,
     session_id: str | None = None,
     pr_url: str = "",
-) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
+) -> AsyncIterator[AgentStepEvent | BugStageChangeEvent | BugCheckpointEvent | BugResultEvent | ErrorEvent]:
     """
     Start a new bug reproduction session.
     Streams SSE events until the graph completes or hits a checkpoint interrupt.
@@ -292,7 +365,7 @@ async def run_bug_agent(
 async def continue_bug_agent(
     session_id: str,
     user_response: dict,
-) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
+) -> AsyncIterator[AgentStepEvent | BugStageChangeEvent | BugCheckpointEvent | BugResultEvent | ErrorEvent]:
     """
     Resume a bug reproduction graph paused at a checkpoint interrupt.
     Called by POST /bug-report/{session_id}/continue (P3 wires the endpoint).
@@ -323,7 +396,7 @@ async def _start_bug_graph(
     attachments: list[str],
     session_id: str | None,
     pr_url: str = "",
-) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
+) -> AsyncIterator[AgentStepEvent | BugStageChangeEvent | BugCheckpointEvent | BugResultEvent | ErrorEvent]:
     thread_id = session_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
 
@@ -369,7 +442,7 @@ async def _start_bug_graph(
 async def _resume_bug_graph(
     session_id: str,
     user_response: dict,
-) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
+) -> AsyncIterator[AgentStepEvent | BugStageChangeEvent | BugCheckpointEvent | BugResultEvent | ErrorEvent]:
     if session_id not in _bug_sessions:
         yield ErrorEvent(message=f"Bug session {session_id!r} not found.")
         return
@@ -393,11 +466,12 @@ async def _stream_bug_graph(
     input_or_command: Any,
     config: dict,
     thread_id: str,
-) -> AsyncIterator[AgentStepEvent | StageChangeEvent | CheckpointEvent | BugResultEvent | ErrorEvent]:
+) -> AsyncIterator[AgentStepEvent | BugStageChangeEvent | BugCheckpointEvent | BugResultEvent | ErrorEvent]:
     """Drive the bug graph, mapping LangGraph events to SSE events."""
     # Load emitted_stages from session so resume calls don't re-emit already-seen stages (Bug #3)
     session = _bug_sessions.get(thread_id, {})
     emitted_stages: set[str] = session.get("emitted_stages", set())
+    agent_steps = 0
 
     async for event in graph.astream_events(input_or_command, version="v2", config=config):
         event_type = event["event"]
@@ -408,12 +482,13 @@ async def _stream_bug_graph(
                 emitted_stages.add(node_name)
                 if thread_id in _bug_sessions:
                     _bug_sessions[thread_id]["emitted_stages"] = emitted_stages
-                yield StageChangeEvent(
+                yield BugStageChangeEvent(
                     stage=node_name,
                     summary=f"Starting {node_name.replace('_', ' ')}",
                 )
 
         elif event_type == "on_tool_start":
+            agent_steps += 1
             tool_name = event["name"]
             tool_input = event["data"].get("input", {})
             yield AgentStepEvent(tool=tool_name, summary=_bug_tool_summary(tool_name, tool_input))
@@ -428,7 +503,7 @@ async def _stream_bug_graph(
             for intr in getattr(task, "interrupts", [])
         ]
         payload = interrupt_values[0] if interrupt_values else {}
-        yield CheckpointEvent(
+        yield BugCheckpointEvent(
             session_id=thread_id,
             # Use the interrupt payload's stage_completed — state.current_stage already
             # points to the NEXT stage by the time we read it (Bug #2)
@@ -443,21 +518,27 @@ async def _stream_bug_graph(
             return
         from agent.sessions import get_session, update_session
 
+        br_parsed: BugReport | None = None
         try:
             br_parsed = (
                 bug_report
                 if isinstance(bug_report, BugReport)
-                else BugReport.model_validate(bug_report)
+                else _coerce_to_bug_report(bug_report, state.values)
             )
             s = get_session(thread_id)
             if s is not None and br_parsed is not None:
                 update_session(thread_id, bug_report=br_parsed, current_stage="done")
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            print(f"[bug_agent] failed to parse bug report: {e}", flush=True)
+            traceback.print_exc()
+        if br_parsed is None:
+            yield ErrorEvent(message="Bug reproduction completed but report could not be parsed.")
+            return
         yield BugResultEvent(
             session_id=thread_id,
-            bug_report=bug_report,
-            full_state=dict(state.values),
+            report=br_parsed,
+            agent_steps=agent_steps,
         )
 
 

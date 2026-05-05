@@ -84,6 +84,7 @@ class AffectedComponent(BaseModel):
     component: str
     files_changed: list[str] = Field(default_factory=list)
     impact_summary: str = ""
+    impact_detail: str | None = None  # Expanded explanation (shown on demand)
     risks: list[str] = Field(default_factory=list)
     confidence: Literal["high", "medium", "low"] = "low"
     unit_tests: list[UnitTestSpec] = Field(default_factory=list)
@@ -94,6 +95,7 @@ class AnalyzeResponse(BaseModel):
     pr_title: str
     pr_url: str
     pr_summary: str
+    pr_summary_detail: str | None = None  # Expanded PR description (shown on demand)
     affected_components: list[AffectedComponent]
     e2e_test_plans: list[E2ETestPlan] = Field(default_factory=list)
     agent_steps: int
@@ -310,9 +312,11 @@ class BugReport(BaseModel):
     expected_behavior: str
     actual_behavior: str
     root_cause_analysis: str
+    root_cause_detail: str | None = None  # Expanded root cause explanation (shown on demand)
     affected_components: list[AffectedComponent]
     evidence: ResearchFindings
     recommendations: list[str]
+    recommendation_details: list[str] = Field(default_factory=list)  # One detail per recommendation
     confidence: Literal["high", "medium", "low"]
     jira_url: str | None = None
 

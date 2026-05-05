@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronDown, ChevronRight, CheckCircle, AlertTriangle, Layers, Code, Eye } from '@/lib/lucide-icons';
+import { ChevronDown, ChevronRight, CheckCircle, AlertTriangle, Layers, Code, Eye, ExternalLink } from '@/lib/lucide-icons';
 import type { AnalyzeResult, AffectedComponent, UnitTestSpec, IntegrationTestSpec, E2ETestPlan } from '../services/types';
 
 const CONFIDENCE_STYLES: Record<string, string> = {
@@ -120,8 +120,25 @@ const E2EPlanCard = ({ plan }: { plan: E2ETestPlan }) => {
   );
 };
 
+/* ── Clickable file link ── */
+const FileLink = ({ file, allFiles, onFileNavigate }: { file: string; allFiles: string[]; onFileNavigate?: (path: string, allFiles?: string[]) => void }) => {
+  if (!onFileNavigate) {
+    return <span className="font-mono text-[10px] text-text-muted">{file}</span>;
+  }
+  return (
+    <button
+      onClick={() => onFileNavigate(file, allFiles)}
+      className="group flex items-center gap-1 font-mono text-[10px] text-accent hover:underline"
+      title="View in graph"
+    >
+      {file}
+      <ExternalLink className="h-2.5 w-2.5 opacity-0 transition-opacity group-hover:opacity-100" />
+    </button>
+  );
+};
+
 /* ── Component Card ── */
-const ComponentResultCard = ({ component }: { component: AffectedComponent }) => {
+const ComponentResultCard = ({ component, allFiles, onFileNavigate }: { component: AffectedComponent; allFiles: string[]; onFileNavigate?: (path: string, allFiles?: string[]) => void }) => {
   const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'unit' | 'integration'>('unit');
   const confStyle = CONFIDENCE_STYLES[component.confidence] || CONFIDENCE_STYLES.medium;
@@ -139,7 +156,16 @@ const ComponentResultCard = ({ component }: { component: AffectedComponent }) =>
 
       {open && (
         <div className="border-t border-border-subtle px-4 pb-4 pt-3">
-          <p className="mb-3 text-xs leading-relaxed text-text-secondary">{component.impact_summary}</p>
+          <p className="mb-1 text-xs leading-relaxed text-text-secondary">{component.impact_summary}</p>
+          {component.impact_detail && (
+            <details className="mb-3">
+              <summary className="cursor-pointer text-[11px] text-accent hover:underline">More detail</summary>
+              <p className="mt-1.5 rounded border border-border-subtle bg-deep px-3 py-2 text-[11px] leading-relaxed text-text-muted">
+                {component.impact_detail}
+              </p>
+            </details>
+          )}
+          {!component.impact_detail && <div className="mb-3" />}
 
           {component.risks.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
@@ -152,13 +178,13 @@ const ComponentResultCard = ({ component }: { component: AffectedComponent }) =>
           )}
 
           {component.files_changed.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-1">
-              {component.files_changed.map((f, i) => <span key={i} className="font-mono text-[10px] text-text-muted">{f}</span>)}
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {component.files_changed.map((f, i) => <FileLink key={i} file={f} allFiles={allFiles} onFileNavigate={onFileNavigate} />)}
             </div>
           )}
 
           {/* Sprint 2: Unit / Integration tabs */}
-          {(component.unit_tests?.length > 0 || component.integration_tests?.length > 0) && (
+          {((component.unit_tests?.length ?? 0) > 0 || (component.integration_tests?.length ?? 0) > 0) && (
             <>
               <div className="mb-2 flex gap-1 border-b border-border-subtle pb-2">
                 <button onClick={() => setActiveTab('unit')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'unit' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
@@ -185,9 +211,10 @@ const ComponentResultCard = ({ component }: { component: AffectedComponent }) =>
 interface TestPipelineResultsProps {
   result: AnalyzeResult;
   onHighlightFiles: (filePaths: string[]) => void;
+  onFileNavigate?: (filePath: string, allFiles?: string[]) => void;
 }
 
-export const TestPipelineResults = ({ result, onHighlightFiles }: TestPipelineResultsProps) => {
+export const TestPipelineResults = ({ result, onHighlightFiles, onFileNavigate }: TestPipelineResultsProps) => {
   const [activeSection, setActiveSection] = useState<'components' | 'e2e'>('components');
 
   const allFiles = result.affected_components.flatMap((c) => c.files_changed);
@@ -200,6 +227,14 @@ export const TestPipelineResults = ({ result, onHighlightFiles }: TestPipelineRe
           <div className="min-w-0">
             <a href={result.pr_url} target="_blank" rel="noopener noreferrer" className="block truncate text-sm font-medium text-accent hover:underline">{result.pr_title}</a>
             <p className="mt-1 text-[11px] leading-relaxed text-text-muted">{result.pr_summary}</p>
+            {result.pr_summary_detail && (
+              <details className="mt-1.5">
+                <summary className="cursor-pointer text-[10px] text-accent hover:underline">Full description</summary>
+                <p className="mt-1 rounded border border-border-subtle bg-deep px-2.5 py-2 text-[11px] leading-relaxed text-text-muted">
+                  {result.pr_summary_detail}
+                </p>
+              </details>
+            )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1 text-[10px] text-text-muted">
             <span>{result.agent_steps} steps</span>
@@ -241,6 +276,8 @@ export const TestPipelineResults = ({ result, onHighlightFiles }: TestPipelineRe
               <ComponentResultCard
                 key={i}
                 component={comp}
+                allFiles={allFiles}
+                onFileNavigate={onFileNavigate}
               />
             ))}
           </div>
