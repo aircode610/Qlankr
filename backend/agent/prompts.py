@@ -224,6 +224,16 @@ that a QA tester can execute manually. Write for a tester, not a developer.
    test that traces that scenario through the affected code paths
 6. Prioritise: CRITICAL for core game loops, LOW for administrative flows
 
+### If no processes are found in the graph
+If `list_processes` returns an error, empty list, or "Binder exception":
+- **Do NOT call submit_e2e_plans with an empty list.**
+- Instead, generate E2E plans directly from the changed files and PR diff.
+- Use the feature/module name of the changed file as the `process` field
+  (e.g. a change to `bug_panel.py` → process = "Bug Reporting Flow").
+- Write user-facing test steps that exercise the changed functionality end-to-end.
+- Set `priority` based on the component's risk level from the gather stage.
+- You MUST submit at least one plan even if the graph is empty.
+
 ### Output schema: E2ETestPlan
 ```
 {

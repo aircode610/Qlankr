@@ -8,6 +8,32 @@
 | Rejection message echoes back the file list | After a rejection the LLM was retrying blind with no new information; showing it the files it already fetched gives it the data to build components immediately. |
 | Rewrote `GATHER_PROMPT` — components first, graph calls capped at 5 | The old prompt had component-grouping as Step 4 after per-file graph calls; on an 18-file PR those calls ate the entire 15-call budget before Step 4 was reached. |
 
+# E2E Process Graph Fixes
+
+| Change | Why |
+|--------|-----|
+| Removed `list_processes`/`get_process` from `E2E_TOOLS` | `make_process_tools()` already injects these tools with `repo_name` baked in; keeping them in `E2E_TOOLS` too exposed the LLM to two tools with identical names — one requiring `repo=` and one not, causing unreliable calls. |
+| `e2e_checkpoint_node` — added `process_count`/`process_note` to interrupt payload | Frontend now receives the process count before the user proceeds to E2E planning, so they can see the warning ("no processes detected") before the agent runs rather than after getting poor results. |
+| `e2e.py` — three-way processes clause based on `repo_stats.processes` | When `processes == 0` in graph stats, agent is told not to call `list_processes` (it will fail with "Binder exception") and to derive plans from PR diff instead; when pre-fetch failed but count is non-zero, agent is told to call `list_processes` itself. |
+
+# Submit Tool Empty-Arg Fixes
+
+| Change | Why |
+|--------|-----|
+| `submit_e2e_plans` — added `= []` default + rejection guard | LLM called with `{}` (no args); `list` with no default is required in Pydantic schema, causing `ValidationError` which LangGraph re-raises (not swallowed as a ToolMessage), crashing the pipeline. The rejection message instructs the LLM to generate plans from PR diff if the process graph is empty. |
+| `submit_integration_tests` — same default + rejection guard | Preemptive fix for the identical pattern: an empty call would crash the same way. Rejection message tells the LLM to infer module boundaries from the component list it already has. |
+| `E2E_PROMPT` — "no processes found" fallback section | `list_processes` Cypher query throws "Binder exception" when no Process nodes exist in the graph; LLM was submitting empty plans instead of falling back to PR-diff-based plans. Prompt now explicitly instructs the LLM to use the changed file names as process names and generate plans from the diff. |
+
+# E2E Stage Fixes
+
+| Change | Why |
+|--------|-----|
+| `make_process_tools` — drop context manager, use Cypher directly | `langchain-mcp-adapters 0.1.0` removed async context manager support on `MultiServerMCPClient`; `list_processes` was failing instantly (0.01s) because `async with get_mcp_client()` throws immediately. The Cypher fallback already used the valid `get_tools()` API, so we go straight to it. |
+| Batch-aware break (`pending_tools` counter) | Same parallel-batch dangling tool call risk as integration. |
+| `fix_dangling_tool_calls` on accumulated messages | Same safety net as integration — raw history passed to forced-synthesis fallback could contain unmatched tool_calls. |
+| `recursion_limit: 5` → `25` in forced-synthesis | Same crash risk as gather and integration. |
+| Added `pre_model_hook=make_messages_modifier()` | Same context-bloat gap — `get_process` responses can be large. |
+
 # Integration Stage Fixes
 
 | Change | Why |

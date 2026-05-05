@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
-from agent.tools import filter_tools, get_mcp_client, safe_tools, make_process_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, make_process_tools, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -38,7 +38,18 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     e2e_results: list[dict] = []
 
-    def submit_e2e_plans(e2e_test_plans: list) -> str:
+    def submit_e2e_plans(e2e_test_plans: list = []) -> str:
+        if not e2e_test_plans:
+            return (
+                "REJECTED: e2e_test_plans is empty or missing. "
+                "You MUST generate at least one E2E test plan. "
+                "If no processes were found in the graph, create plans directly from "
+                "the changed files and PR diff — use the file list you already have. "
+                "Each plan needs: process (use the file/feature name), scenario, "
+                "preconditions, steps [{step, action, expected}], affected_by_pr, "
+                "priority, estimated_duration. "
+                "Call submit_e2e_plans again with a non-empty list."
+            )
         e2e_results.extend(e2e_test_plans)
         return "E2E test plans recorded."
 
@@ -62,11 +73,30 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     # Processes already pre-fetched in gather stage
     processes = state.get("processes", [])
-    processes_clause = (
-        "Pre-fetched processes: " + ", ".join(p.get("name", "") for p in processes[:20])
-        if processes
-        else "No processes pre-fetched — use list_processes tool to discover them."
-    )
+    process_count_in_graph = state.get("repo_stats", {}).get("processes", 0)
+
+    if process_count_in_graph == 0:
+        print(
+            "  [e2e] WARNING: repo_stats.processes=0 — no Process nodes in graph. "
+            "E2E plans will be derived from PR diff only.",
+            flush=True,
+        )
+        processes_clause = (
+            "NO PROCESSES FOUND: The knowledge graph contains no indexed execution flows "
+            f"for repo '{repo_name}'. Do NOT call list_processes — it will fail. "
+            "Instead, generate E2E test plans directly from the changed files listed below. "
+            "Use the feature/module name of each changed file as the 'process' field."
+        )
+    elif processes:
+        processes_clause = (
+            "Pre-fetched processes: " + ", ".join(p.get("name", "") for p in processes[:20])
+        )
+    else:
+        # Graph has processes but pre-fetch failed — let the agent discover them
+        processes_clause = (
+            f"Graph has {process_count_in_graph} indexed processes but pre-fetch failed. "
+            "Use list_processes tool to discover them."
+        )
 
     # User context (optional bug report / scenario)
     user_context = state.get("user_context")
@@ -99,9 +129,13 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
         checkpointer=_saver,
+        pre_model_hook=make_messages_modifier(),  # cap tool outputs at 12K chars
     )
 
     tool_call_count = 0
+    pending_tools = 0   # tracks how many parallel tool calls are mid-flight
+    budget_reached = False
+
     async for event in agent.astream_events(
         {"messages": [human_message]},
         version="v2",
@@ -109,17 +143,22 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     ):
         event_type = event["event"]
         if event_type == "on_tool_start":
+            pending_tools += 1
             tool_call_count += 1
             print(f"  [e2e {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
             if event["name"] != "submit_e2e_plans" and tool_call_count >= BUDGET:
+                budget_reached = True
+        elif event_type == "on_tool_end":
+            pending_tools = max(0, pending_tools - 1)
+            if event.get("name") == "submit_e2e_plans":
                 break
-        elif event_type == "on_tool_end" and event.get("name") == "submit_e2e_plans":
-            break
+            if budget_reached and pending_tools == 0:
+                break
 
     if not e2e_results:
         print(f"  [e2e] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
         agent_state = await agent.aget_state(_stage_config)
-        accumulated = agent_state.values.get("messages", [])
+        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
         submit_agent = create_react_agent(
             model=llm,
             tools=[submit_tool],
@@ -132,7 +171,7 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
                 "Use priority='LOW' for any plans with incomplete process details."
             ))]},
             version="v2",
-            config={"recursion_limit": 5},
+            config={"recursion_limit": 25},
         ):
             pass
 

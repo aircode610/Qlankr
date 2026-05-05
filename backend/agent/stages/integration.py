@@ -38,7 +38,18 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
 
     integration_results: list[dict] = []
 
-    def submit_integration_tests(integration_tests: list) -> str:
+    def submit_integration_tests(integration_tests: list = []) -> str:
+        if not integration_tests:
+            return (
+                "REJECTED: integration_tests is empty or missing. "
+                "You MUST generate at least one integration test spec. "
+                "If graph tools returned no results, generate specs from the affected "
+                "components and PR diff you already have — identify the module boundaries "
+                "that the changed files cross and describe them. "
+                "Each spec needs: integration_point, modules_involved, test_cases "
+                "[{name, scenario, expected}], data_setup, risk_level. "
+                "Call submit_integration_tests again with a non-empty list."
+            )
         integration_results.extend(integration_tests)
         return "Integration tests recorded."
 

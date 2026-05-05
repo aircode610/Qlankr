@@ -41,8 +41,9 @@ E2E_TOOLS: set[str] = {
     "impact",
     "query",
     "cypher",
-    "list_processes",
-    "get_process",
+    # list_processes and get_process are injected via make_process_tools()
+    # with repo_name baked in. Including them here too would give the LLM
+    # two tools with the same name — one requiring repo= and one not.
 }
 
 # ── Bug reproduction stage tool subsets ──────────────────────────────────────
@@ -440,25 +441,15 @@ def make_process_tools(repo_name: str) -> list[StructuredTool]:
 
     async def list_processes() -> str:
         """List all execution flows (processes) in the indexed repo."""
-        async with get_mcp_client() as client:
-            try:
-                result = await client.read_resource(
-                    f"gitnexus://repo/{repo_name}/processes"
-                )
-                return str(result)
-            except Exception:
-                return await _cypher_fallback_list_processes(client, repo_name)
+        # MultiServerMCPClient cannot be used as a context manager in 0.1.0+;
+        # go straight to the Cypher fallback which uses the valid get_tools() API.
+        client = get_mcp_client()
+        return await _cypher_fallback_list_processes(client, repo_name)
 
     async def get_process(process_name: str) -> str:
         """Get the full execution flow for a specific process by name."""
-        async with get_mcp_client() as client:
-            try:
-                result = await client.read_resource(
-                    f"gitnexus://repo/{repo_name}/process/{process_name}"
-                )
-                return str(result)
-            except Exception:
-                return await _cypher_fallback_get_process(client, repo_name, process_name)
+        client = get_mcp_client()
+        return await _cypher_fallback_get_process(client, repo_name, process_name)
 
     return [
         StructuredTool.from_function(

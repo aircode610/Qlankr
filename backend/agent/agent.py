@@ -167,8 +167,28 @@ def e2e_checkpoint_node(state: AnalysisState) -> dict:
     Human-in-the-loop before E2E planning.
     Asks user for any upfront context (user flows, bug reports, scenarios).
     """
+    process_count = state.get("repo_stats", {}).get("processes", 0)
+    processes_prefetched = len(state.get("processes", []))
+
+    if process_count == 0:
+        process_note = (
+            "⚠️ No execution flows (processes) were detected in the knowledge graph "
+            "for this repo. E2E plans will be derived from the PR diff and changed files "
+            "rather than pre-indexed user flows — quality will be lower than usual. "
+            "Consider re-indexing the repo if this is unexpected."
+        )
+    elif processes_prefetched == 0:
+        process_note = (
+            f"ℹ️ {process_count} execution flows are indexed, but pre-fetching them failed. "
+            "The agent will re-fetch them during planning."
+        )
+    else:
+        process_note = f"{process_count} execution flows indexed, {processes_prefetched} pre-fetched."
+
     response = interrupt({
         "type": "e2e_context",
+        "process_count": process_count,
+        "process_note": process_note,
         "prompt": (
             "Before planning E2E tests, do you have any context to share?\n"
             "For example: user flows, bug reports, feature descriptions, known edge cases.\n"
