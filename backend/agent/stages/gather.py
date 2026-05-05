@@ -15,7 +15,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, GATHER_PROMPT
-from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -98,22 +98,24 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
 
     def submit_gather(
         pr_title: str,
+        affected_components: list,  # required — no default so JSON schema marks it mandatory
         pr_description: str = "",
         pr_author: str = "",
         pr_files: list = [],
         pr_diff: str = "",
-        affected_components: list = [],
         pr_summary: str = "",
         pr_summary_detail: str | None = None,
     ) -> str:
         if not affected_components:
+            files_hint = ", ".join(pr_files[:15]) if pr_files else "already fetched above"
             return (
                 "REJECTED: affected_components is empty. "
-                "You MUST group the changed files into at least one logical component "
-                "before calling submit_gather. Each component needs: component (name), "
-                "files_changed, impact_summary, risks, confidence. "
-                "Analyse the PR diff and file list, then call submit_gather again "
-                "with a non-empty affected_components list."
+                f"You already have {len(pr_files)} changed files: {files_hint}. "
+                "Group them into logical components by module or layer RIGHT NOW — "
+                "even a single component covering all files is acceptable. "
+                "Each component needs: component (name), files_changed, "
+                "impact_summary (one sentence), risks (list), confidence. "
+                "Call submit_gather again with a non-empty affected_components list."
             )
         results.append(_GatherOutput(
             pr_title=pr_title,
@@ -163,6 +165,7 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{GATHER_PROMPT}"),
         checkpointer=_saver,
+        pre_model_hook=make_messages_modifier(),  # cap tool outputs at 12K chars
     )
 
     tool_call_count = 0
@@ -240,7 +243,7 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
                 "Use confidence='low' for any components not fully analysed."
             ))]},
             version="v2",
-            config={"recursion_limit": 5},
+            config={"recursion_limit": 25},
         ):
             pass
 

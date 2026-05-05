@@ -71,44 +71,41 @@ Key facts:
 GATHER_PROMPT = """\
 ## Current Stage: Context Gathering
 
-Your goal is to pre-fetch all context the downstream stages need AND perform
-an initial impact assessment per component.
+Your goal is to collect PR metadata, identify changed files, group them into logical
+components, and enrich each component with graph data where available.
 
-### Your task
-1. Fetch PR metadata: title, description, author via `get_pull_request`
-2. Fetch the changed file list and diff via `get_pull_request_files`
-3. **If a GitNexus repo is available** (repo name provided): for each changed file,
-   find its defined symbols via Cypher:
-   MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
-   AND f.filePath='<path>' RETURN s.name, labels(s) LIMIT 30
-   Then call `impact` on 1-2 key symbols to get blast radius and risk level.
-   This is REQUIRED when the repo is indexed — do not skip it.
-4. Group changed files into logical components and for each produce:
-   - component: short descriptive name
-   - files_changed: list of file paths
-   - impact_summary: ONE sentence (max 20 words) — what breaks if this changes
-   - impact_detail: 2-4 sentences expanding on the impact with specifics (callers, data flow, risk chain)
-   - risks: list of short, specific risk strings (e.g. "save corruption if X is called before Y")
-   - confidence: "high" (symbol in graph, callers found via impact) |
-                 "medium" (partial graph data) |
-                 "low" (new file, no graph data, or no repo indexed)
+### Step-by-step (follow this order — do NOT skip steps)
+
+**Step 1 — Fetch PR data (2 calls)**
+- `get_pull_request` → title, description, author
+- `get_pull_request_files` → full list of changed files and diffs
+
+**Step 2 — Build affected_components immediately (0 calls)**
+As soon as you have the file list, group ALL files into logical components by
+module/layer/subsystem. Do this BEFORE any graph tool calls. Even a single component
+covering all files is fine. For each component produce:
+- `component`: short descriptive name (e.g. "Bug Pipeline", "Frontend Components")
+- `files_changed`: list of file paths in this component
+- `impact_summary`: ONE sentence (max 20 words) — what breaks if this changes
+- `impact_detail`: 2-4 sentences with specifics (optional, use what you know so far)
+- `risks`: list of specific risk strings
+- `confidence`: "low" until enriched with graph data
+
+**Step 3 — Enrich with graph data if repo is indexed (up to 5 calls total)**
+Pick the 2-3 most critical components only. For each:
+- `cypher` to find defined symbols in the changed files
+- `impact` on 1 key symbol to get blast radius and callers
+Update that component's `impact_detail`, `risks`, and `confidence` from the results.
+Do NOT run cypher/impact on every file — 5 graph calls maximum total.
+
+**Step 4 — Submit**
+Call `submit_gather` with all collected data. `affected_components` MUST be non-empty.
 
 ### Output format rules
-- Keep summaries SHORT — one sentence each. Users scan, not read.
-- Put technical depth in the `_detail` fields — they appear behind an expand button.
-- Risks must be specific and actionable — "may break" is useless, "null pointer in Foo.bar when inventory empty" is useful.
-
-### Output
-Call `submit_gather` with:
-- pr_title, pr_description, pr_author, pr_files, pr_diff
-- pr_summary: ONE sentence overview of the PR (max 25 words)
-- pr_summary_detail: 2-5 sentences with full context (motivation, scope, technical approach)
-- affected_components — REQUIRED non-empty list of objects with ALL fields above
-
-CRITICAL: affected_components MUST contain at least one component. The call will be
-REJECTED if it is empty. Group changed files by module/subsystem — even a single
-component covering all files is acceptable. Do NOT call submit_gather until you have
-built the component list from the changed file paths and diff.
+- Keep `impact_summary` to ONE sentence. Users scan, not read.
+- Put technical depth in `impact_detail` — it appears behind an expand button.
+- Risks must be specific: "null pointer in Foo.bar when inventory empty", not "may break".
+- For new files not yet in the graph, set confidence="low" and note "new file".
 
 ### Allowed tools
 get_pull_request, get_pull_request_files, get_pull_request_comments,
@@ -116,9 +113,9 @@ get_file_contents, list_directory, search_code, get_commits,
 list_repos, impact, cypher, detect_changes
 
 ### Budget: 15 tool calls maximum
-Stop and output what you have when you reach 15 calls.
-Use confidence="low" and a best-effort impact_summary for any component you
-couldn't fully analyse before hitting the budget.
+Steps 1-2 cost only 2 calls. Reserve at least 1 call for submit_gather.
+At 12 calls: stop all research and call submit_gather with what you have.
+Use confidence="low" for any component not fully enriched — that is fine.
 """
 
 UNIT_PROMPT = """\
