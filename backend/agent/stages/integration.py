@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 
 from agent.prompts import BASE_PROMPT, INTEGRATION_PROMPT
-from agent.tools import filter_tools, get_mcp_client, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -92,9 +92,13 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}"),
         checkpointer=_saver,
+        pre_model_hook=make_messages_modifier(),  # cap tool outputs at 12K chars
     )
 
     tool_call_count = 0
+    pending_tools = 0   # tracks how many parallel tool calls are mid-flight
+    budget_reached = False
+
     async for event in agent.astream_events(
         {"messages": [human_message]},
         version="v2",
@@ -102,17 +106,27 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
     ):
         event_type = event["event"]
         if event_type == "on_tool_start":
+            pending_tools += 1
             tool_call_count += 1
             print(f"  [integration {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
             if event["name"] != "submit_integration_tests" and tool_call_count >= BUDGET:
+                budget_reached = True
+        elif event_type == "on_tool_end":
+            pending_tools = max(0, pending_tools - 1)
+            if event.get("name") == "submit_integration_tests":
                 break
-        elif event_type == "on_tool_end" and event.get("name") == "submit_integration_tests":
-            break
+            # Only break once the current parallel batch is fully complete —
+            # breaking mid-batch leaves dangling tool_calls with no ToolMessages,
+            # which Anthropic's API rejects as invalid chat history.
+            if budget_reached and pending_tools == 0:
+                break
 
     if not integration_results:
         print(f"  [integration] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
         agent_state = await agent.aget_state(_stage_config)
-        accumulated = agent_state.values.get("messages", [])
+        # Fix any dangling tool_calls left by the budget break before handing the
+        # history to the forced-submit agent — without this Anthropic rejects the request.
+        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
         submit_agent = create_react_agent(
             model=llm,
             tools=[submit_tool],
@@ -125,7 +139,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
                 "Use risk_level='LOW' for any specs with incomplete evidence."
             ))]},
             version="v2",
-            config={"recursion_limit": 5},
+            config={"recursion_limit": 25},
         ):
             pass
 
