@@ -134,6 +134,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
     budget_reached = False
     submit_rejections = 0
     MAX_SUBMIT_REJECTIONS = 3
+    RESEARCH_LIMIT = BUDGET - 5
 
     async for event in agent.astream_events(
         {"messages": [human_message]},
@@ -145,7 +146,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
             pending_tools += 1
             tool_call_count += 1
             print(f"  [integration {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if event["name"] != "submit_integration_tests" and tool_call_count >= BUDGET:
+            if event["name"] != "submit_integration_tests" and tool_call_count >= RESEARCH_LIMIT:
                 budget_reached = True
         elif event_type == "on_tool_end":
             pending_tools = max(0, pending_tools - 1)
@@ -167,27 +168,34 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
     if not integration_results:
         print(f"  [integration] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
 
-        # Build a clean synthesis context from state data instead of passing
-        # noisy accumulated messages that the LLM can't synthesize from.
-        # Increase max_tokens: integration specs with multiple modules easily
-        # exceed the default 4096 and get truncated to {}.
-        structured_llm = llm.bind(max_tokens=16384).with_structured_output(_IntegrationOutput)
+        # Use a direct LLM call with explicit max_tokens and JSON instructions.
+        # with_structured_output() loses bind(max_tokens=...) and hits the default
+        # 4096 token limit, truncating the response to {}.
         try:
-            result = await structured_llm.ainvoke(
-                [SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}")]
+            response = await llm.ainvoke(
+                [SystemMessage(content=(
+                    "You are a JSON generator. Return ONLY a valid JSON object, no markdown, "
+                    "no explanation, no code fences. The object must have a single key "
+                    "'integration_tests' containing a non-empty array of test specs."
+                ))]
                 + [HumanMessage(content=(
                     f"Budget exhausted after {tool_call_count} tool calls.\n\n"
                     f"{diff_section}"
                     f"Affected components:\n{components_block}\n\n"
                     f"{repo_clause}\n\n"
-                    "Generate integration test specs from the above. For each pair of "
-                    "components that interact, create a spec with: integration_point, "
-                    "modules_involved, test_cases [{name, scenario, expected}], "
-                    "data_setup, risk_level ('MEDIUM' unless obviously critical)."
+                    "Generate integration test specs as a JSON object: "
+                    '{"integration_tests": [{"integration_point": "ModuleA <> ModuleB", '
+                    '"modules_involved": ["module_a", "module_b"], '
+                    '"test_cases": [{"name": "...", "scenario": "...", "expected": "..."}], '
+                    '"data_setup": "...", "risk_level": "MEDIUM"}]}. Return ONLY the JSON.'
                 ))],
+                max_tokens=16384,
             )
+            import json
+            data = json.loads(response.content)
+            output = _IntegrationOutput.model_validate(data)
             integration_results.extend(
-                [spec.model_dump() for spec in result.integration_tests]
+                [spec.model_dump() for spec in output.integration_tests]
             )
         except Exception as e:
             print(f"  [integration] structured output fallback failed: {e}", flush=True)

@@ -195,6 +195,10 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     budget_reached = False
     submit_rejections = 0
     MAX_SUBMIT_REJECTIONS = 3
+    # Reserve calls for submit — cut off research early so the fallback has room.
+    # The agent fires parallel batches of 5+, so the actual count at break time
+    # will be RESEARCH_LIMIT + (batch_size - 1) in the worst case.
+    RESEARCH_LIMIT = BUDGET - 8
 
     async for event in agent.astream_events(
         {"messages": [human_message]},
@@ -206,7 +210,7 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
             pending_tools += 1
             tool_call_count += 1
             print(f"  [e2e {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if event["name"] != "submit_e2e_plans" and tool_call_count >= BUDGET:
+            if event["name"] != "submit_e2e_plans" and tool_call_count >= RESEARCH_LIMIT:
                 budget_reached = True
         elif event_type == "on_tool_end":
             pending_tools = max(0, pending_tools - 1)
@@ -263,19 +267,30 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
                 "priority ('MEDIUM' unless obviously critical), estimated_duration."
             ))]
 
-        # Use structured output instead of a full ReAct agent — one LLM call, no
-        # tool overhead, Pydantic-validated response.
-        # Increase max_tokens: E2E plans with multiple components and steps easily
-        # exceed the default 4096 and get truncated to {}.
-        structured_llm = llm.bind(max_tokens=16384).with_structured_output(_E2EOutput)
+        # Use a direct LLM call with explicit max_tokens and JSON instructions.
+        # with_structured_output() loses bind(max_tokens=...) and hits the default
+        # 4096 token limit, truncating the response to {}.
         try:
-            result = await structured_llm.ainvoke(
-                [SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}")]
-                + synthesis_messages,
+            response = await llm.ainvoke(
+                [SystemMessage(content=(
+                    "You are a JSON generator. Return ONLY a valid JSON object, no markdown, "
+                    "no explanation, no code fences. The object must have a single key "
+                    "'e2e_test_plans' containing a non-empty array of test plans."
+                ))]
+                + synthesis_messages
+                + [HumanMessage(content=(
+                    "Return the E2E test plans as a JSON object: "
+                    '{"e2e_test_plans": [{"process": "...", "scenario": "...", '
+                    '"preconditions": "...", "steps": [{"step": 1, "action": "...", '
+                    '"expected": "..."}], "affected_by_pr": [...], "priority": "MEDIUM", '
+                    '"estimated_duration": "5 min"}]}. Return ONLY the JSON.'
+                ))],
+                max_tokens=16384,
             )
-            e2e_results.extend(
-                [plan.model_dump() for plan in result.e2e_test_plans]
-            )
+            import json
+            data = json.loads(response.content)
+            output = _E2EOutput.model_validate(data)
+            e2e_results.extend([plan.model_dump() for plan in output.e2e_test_plans])
         except Exception as e:
             print(f"  [e2e] structured output fallback failed: {e}", flush=True)
 
