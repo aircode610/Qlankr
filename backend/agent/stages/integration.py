@@ -20,7 +20,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, INTEGRATION_PROMPT
-from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_budget_warning_hook, make_messages_modifier, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -123,7 +123,10 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}"),
         checkpointer=_saver,
-        pre_model_hook=make_messages_modifier(),  # cap tool outputs at 12K chars
+        pre_model_hook=make_budget_warning_hook(
+            budget=BUDGET,
+            base_hook=make_messages_modifier(),
+        ),
     )
 
     tool_call_count = 0
@@ -163,24 +166,22 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
 
     if not integration_results:
         print(f"  [integration] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
-        agent_state = await agent.aget_state(_stage_config)
-        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
-        # Trim to the last 30 messages — passing the full history risks sending 100K+
-        # tokens to Anthropic which causes the streaming connection to drop mid-response
-        # (RemoteProtocolError → CancelledError).
-        accumulated = accumulated[-30:] if len(accumulated) > 30 else accumulated
 
-        # Use structured output instead of a full ReAct agent — one LLM call, no
-        # tool overhead, Pydantic-validated response.
+        # Build a clean synthesis context from state data instead of passing
+        # noisy accumulated messages that the LLM can't synthesize from.
         structured_llm = llm.with_structured_output(_IntegrationOutput)
         try:
             result = await structured_llm.ainvoke(
                 [SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}")]
-                + accumulated
                 + [HumanMessage(content=(
-                    f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
-                    "Return all integration test specs from your analysis as structured output. "
-                    "Use risk_level='LOW' for any specs with incomplete evidence."
+                    f"Budget exhausted after {tool_call_count} tool calls.\n\n"
+                    f"{diff_section}"
+                    f"Affected components:\n{components_block}\n\n"
+                    f"{repo_clause}\n\n"
+                    "Generate integration test specs from the above. For each pair of "
+                    "components that interact, create a spec with: integration_point, "
+                    "modules_involved, test_cases [{name, scenario, expected}], "
+                    "data_setup, risk_level ('MEDIUM' unless obviously critical)."
                 ))],
             )
             integration_results.extend(

@@ -20,7 +20,7 @@ from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
-from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, make_process_tools, safe_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_budget_warning_hook, make_messages_modifier, make_process_tools, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
@@ -184,7 +184,10 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
         checkpointer=_saver,
-        pre_model_hook=make_messages_modifier(),  # cap tool outputs at 12K chars
+        pre_model_hook=make_budget_warning_hook(
+            budget=BUDGET,
+            base_hook=make_messages_modifier(),
+        ),
     )
 
     tool_call_count = 0
@@ -242,14 +245,22 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
                 "priority ('MEDIUM' unless obviously critical), estimated_duration."
             ))]
         else:
-            agent_state = await agent.aget_state(_stage_config)
-            accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
-            # Trim to the last 30 messages to keep context small.
-            accumulated = accumulated[-30:] if len(accumulated) > 30 else accumulated
-            synthesis_messages = accumulated + [HumanMessage(content=(
-                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
-                "Return all E2E test plans from your analysis as structured output. "
-                "Use priority='LOW' for any plans with incomplete process details."
+            # Build a clean synthesis context from state data instead of passing
+            # 30 noisy accumulated messages that the LLM can't synthesize from.
+            pr_diff = state.get("pr_diff", "")
+            diff_snippet = f"\n## PR Diff\n```\n{pr_diff[:3000]}\n```" if pr_diff else ""
+            process_names = ", ".join(p.get("name", p.get("label", "?")) for p in processes[:15])
+            synthesis_messages = [HumanMessage(content=(
+                f"Budget exhausted after {tool_call_count} tool calls.\n\n"
+                f"Pre-fetched processes: {process_names}\n\n"
+                f"Affected components:\n{components_block}\n\n"
+                f"{files_clause}\n"
+                f"{diff_snippet}\n\n"
+                "Generate E2E test plans from the above. For each affected component, "
+                "create at least one plan with: process (use process label or component name), "
+                "scenario, preconditions, steps [{step, action, expected}], "
+                "affected_by_pr (list of changed files), "
+                "priority ('MEDIUM' unless obviously critical), estimated_duration."
             ))]
 
         # Use structured output instead of a full ReAct agent — one LLM call, no

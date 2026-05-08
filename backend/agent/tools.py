@@ -372,6 +372,48 @@ def make_messages_modifier(max_chars: int = _TOOL_OUTPUT_MAX_CHARS):
     return _hook
 
 
+def make_budget_warning_hook(
+    budget: int,
+    base_hook=None,
+    threshold_pct: float = 0.75,
+):
+    """
+    Return a pre_model_hook that injects a one-time budget warning when the
+    ToolMessage count exceeds *threshold_pct* of *budget*.
+
+    If *base_hook* is provided, it is applied first (e.g. the truncation hook
+    from ``make_messages_modifier()``).
+    """
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    _warned = [False]
+    threshold = int(budget * threshold_pct)
+
+    def _hook(state: dict) -> dict:
+        # Apply base hook first (e.g. truncation)
+        base_result = base_hook(state) if base_hook else {}
+        messages = base_result.get("messages", state.get("messages", []))
+
+        if _warned[0]:
+            return base_result
+
+        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+        if tool_count >= threshold:
+            _warned[0] = True
+            warning = HumanMessage(content=(
+                f"BUDGET WARNING: You have used {tool_count} of {budget} tool calls. "
+                "STOP all research immediately. Synthesize your findings and call "
+                "the submit tool NOW with what you have. Do not make any more "
+                "research tool calls. Use confidence/priority='LOW' for anything "
+                "not fully analyzed."
+            ))
+            return {"messages": messages + [warning]}
+
+        return base_result
+
+    return _hook
+
+
 def fix_dangling_tool_calls(messages: list) -> list:
     """
     After a budget break the last AIMessage may contain tool_calls that never
