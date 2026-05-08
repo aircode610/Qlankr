@@ -132,19 +132,50 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     affected_files = [f for c in components for f in c.get("files_changed", [])]
     files_clause = f"Changed files: {', '.join(affected_files[:20])}" if affected_files else ""
 
+    # Include a diff snippet so the agent knows what actually changed
+    pr_diff = state.get("pr_diff", "")
+    diff_section = (
+        f"\n## PR Diff\n```\n{pr_diff[:4000]}\n```\n"
+        if pr_diff
+        else ""
+    )
+
+    components_block = "\n".join(
+        f"- {c.get('component')}: {', '.join(c.get('files_changed', []))}"
+        for c in components
+    )
+
     _saver = MemorySaver()
     _thread = f"{state.get('session_id', state.get('pr_url', 'anon'))}-e2e-{uuid4().hex[:8]}"
     _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 50}
 
-    human_message = HumanMessage(content=(
-        f"{processes_clause}\n"
-        f"{files_clause}\n"
-        f"{repo_clause}"
-        f"{context_clause}\n\n"
-        "Identify which processes are affected by these file changes, "
-        "fetch their details, and generate E2E test plans. "
-        "Call submit_e2e_plans with all plans when done."
-    ))
+    # When no processes exist, give a focused instruction that doesn't
+    # contradict the "no processes" clause by asking to fetch process details.
+    if process_count_in_graph == 0:
+        human_message = HumanMessage(content=(
+            f"{processes_clause}\n\n"
+            f"Affected components:\n{components_block}\n\n"
+            f"{files_clause}\n"
+            f"{diff_section}"
+            f"{context_clause}\n\n"
+            "Generate E2E test plans directly from the affected components and PR diff above. "
+            "For each component, create at least one plan describing user-facing test steps "
+            "that exercise the changed functionality end-to-end. "
+            "Do NOT call cypher, impact, or query — there is no process data to find. "
+            "Call submit_e2e_plans with all plans when done."
+        ))
+        # Strip graph tools — they will only waste budget on Binder exceptions
+        stage_tools = [t for t in stage_tools if t.name not in ("cypher", "impact", "query")]
+    else:
+        human_message = HumanMessage(content=(
+            f"{processes_clause}\n"
+            f"{files_clause}\n"
+            f"{repo_clause}"
+            f"{context_clause}\n\n"
+            "Identify which processes are affected by these file changes, "
+            "fetch their details, and generate E2E test plans. "
+            "Call submit_e2e_plans with all plans when done."
+        ))
 
     agent = create_react_agent(
         model=llm,
