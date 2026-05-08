@@ -157,6 +157,8 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     tool_call_count = 0
     pending_tools = 0   # tracks how many parallel tool calls are mid-flight
     budget_reached = False
+    submit_rejections = 0
+    MAX_SUBMIT_REJECTIONS = 3
 
     async for event in agent.astream_events(
         {"messages": [human_message]},
@@ -173,8 +175,15 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
         elif event_type == "on_tool_end":
             pending_tools = max(0, pending_tools - 1)
             if event.get("name") == "submit_e2e_plans":
-                break
-            if budget_reached and pending_tools == 0:
+                # Only break if submit actually recorded data — rejection
+                # returns guidance the agent can use to retry.
+                if e2e_results:
+                    break
+                submit_rejections += 1
+                print(f"  [e2e] submit_e2e_plans rejected ({submit_rejections}/{MAX_SUBMIT_REJECTIONS})", flush=True)
+                if submit_rejections >= MAX_SUBMIT_REJECTIONS:
+                    break
+            elif budget_reached and pending_tools == 0:
                 break
 
     if not e2e_results:

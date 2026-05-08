@@ -29,6 +29,7 @@ The user interacts via SSE-streamed events and human-in-the-loop checkpoints
 | 2 | **Cypher string injection** | `tools.py:_cypher_fallback_get_process` | Process names injected into Cypher via f-string: `{name: '{process_name}'}`. Names with single quotes (e.g. `Player's Quest`) break the query syntax silently. |
 | 3 | **Forced-submit wastes tool calls** | `e2e.py`, `integration.py` | When budget exhausted, a full ReAct agent was created with only the submit tool. This costs 2+ LLM calls (think → act → think → respond) for what is a single structured-output call. |
 | 4 | **Integration test distribution drops specs** | `integration.py:162-168` | Pure substring matching (`"UI" in "AudioUI"` matches, `"inventory system" in "Inventory"` doesn't). Specs that match no component were silently lost. |
+| 5 | **Submit rejection breaks event loop** | `e2e.py:175`, `integration.py:147` | Event loop breaks on ANY `submit_e2e_plans` / `submit_integration_tests` tool end — even when rejected with empty args. The agent never gets a chance to retry with the rejection guidance. The LLM commonly calls submit with `{}` first (especially when process graph is empty), gets a helpful rejection message, but the loop exits before the agent sees it. Gather stage already handles this correctly with `if results: break`. |
 
 ### HIGH — Fixed
 
@@ -81,7 +82,13 @@ Removed `_make_submit_tool`, `_AnalysisResult`, unused imports (`Annotated`, `Ba
 
 Changed `list = []` to `list | None = None` with explicit `None` → `[]` normalization.
 
-### 7. Tests updated (`test_tools.py`, `test_prompts.py`)
+### 8. Submit rejection no longer breaks event loop (`e2e.py`, `integration.py`)
+
+**Before:** Event loop broke on ANY `submit_e2e_plans` / `submit_integration_tests` tool end, including rejections. The LLM called submit with `{}`, got a rejection with retry guidance, but the loop exited before the agent could see the rejection and self-correct.
+
+**After:** Applies the same pattern as the gather stage: only break if results were actually recorded (`if e2e_results: break`). Rejected submits increment a counter; after 3 rejections, fall through to the structured output fallback. This gives the agent up to 3 chances to self-correct before giving up.
+
+### 9. Tests updated (`test_tools.py`, `test_prompts.py`)
 
 - `test_filter_tools_e2e` — expects `{impact, query, cypher}` (process tools are injected, not filtered)
 - `test_e2e_includes_process_tools` → `test_e2e_process_tools_not_in_static_set` — asserts the opposite
