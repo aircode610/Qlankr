@@ -36,17 +36,25 @@ Pass it as `repo=<name>` on every GitNexus tool call.
 ## Graph Schema (for Cypher queries)
 
 Nodes: File, Function, Class, Method, Interface, Community, Process
+  - Process properties: `id` (e.g. "proc_0_index"), `label` (human-readable),
+    `stepCount`, `processType`, `entryPointId`, `terminalId`
+    **Process has NO `name` or `description` property — use `id` and `label`.**
+
 Relationships: ALL stored as `[:CodeRelation]` with a `type` property:
   - `r.type = 'DEFINES'`         ? File defines a symbol
   - `r.type = 'CALLS'`           ? symbol calls another symbol
   - `r.type = 'IMPORTS'`         ? File imports another File
   - `r.type = 'MEMBER_OF'`       ? symbol belongs to a Community cluster
   - `r.type = 'STEP_IN_PROCESS'` ? symbol is a step in an execution flow
+    (edge properties: `step` (int), `confidence`, `reason` — NOT `order`)
 
 Key facts:
 - `impact` and `context` take a **symbol name**, NOT a file path
 - To find symbols in a file: MATCH (f:File)-[r:CodeRelation]->(s) WHERE r.type='DEFINES'
   AND f.filePath='<path>' RETURN s.name LIMIT 20
+- To list processes: MATCH (p:Process) RETURN p.id, p.label, p.stepCount LIMIT 100
+- To get process steps: MATCH (p:Process {{id:'<id>'}})<-[r:CodeRelation]-(s)
+  WHERE r.type='STEP_IN_PROCESS' RETURN s.name, s.filePath, r.step ORDER BY r.step
 - Files added by the PR won't be in the graph yet ? note "new file ? graph data unavailable"
 - All graph edges are `[:CodeRelation]` ? filter by `r.type`
 
@@ -291,10 +299,14 @@ Available GitNexus tools: impact, context, query, cypher, list_repos, list_proce
 ## Graph Schema (for Cypher queries)
 
 Nodes: File, Function, Class, Method, Interface, Community, Process
+  - Process properties: `id`, `label`, `stepCount`, `processType`, `entryPointId`, `terminalId`
+    **Process has NO `name` or `description` — use `id` and `label`.**
+
 Relationships: ALL stored as `[:CodeRelation]` with a `type` property:
   - `r.type = 'DEFINES'`         — File defines a symbol
   - `r.type = 'CALLS'`           — symbol calls another symbol
   - `r.type = 'STEP_IN_PROCESS'` — symbol is a step in an execution flow
+    (edge properties: `step` (int), `confidence`, `reason` — NOT `order`)
 
 ## Rules
 

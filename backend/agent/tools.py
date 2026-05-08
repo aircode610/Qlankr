@@ -467,32 +467,36 @@ def make_process_tools(
             return "[]"
         try:
             raw = await cypher.ainvoke({
-                "query": "MATCH (p:Process) RETURN p.name AS name, p.description AS description LIMIT 100",
+                "query": (
+                    "MATCH (p:Process) "
+                    "RETURN p.id AS id, p.label AS label, p.stepCount AS stepCount, "
+                    "p.processType AS processType LIMIT 100"
+                ),
                 "repo": repo_name,
             })
             return str(raw)
         except Exception as e:
             return f"Error fetching processes: {e}"
 
-    async def get_process(process_name: str) -> str:
-        """Get the full execution flow for a specific process by name."""
+    async def get_process(process_id: str) -> str:
+        """Get the full execution flow for a specific process by its id."""
         cypher = await _get_cypher_tool()
         if cypher is None:
             return "[]"
-        safe_name = _escape_cypher_string(process_name)
+        safe_id = _escape_cypher_string(process_id)
         try:
             raw = await cypher.ainvoke({
                 "query": (
-                    f"MATCH (p:Process {{name: '{safe_name}'}})<-[r:CodeRelation]-(s) "
+                    f"MATCH (p:Process {{id: '{safe_id}'}})<-[r:CodeRelation]-(s) "
                     "WHERE r.type = 'STEP_IN_PROCESS' "
-                    "RETURN s.name AS name, s.filePath AS filePath, r.order AS order "
-                    "ORDER BY r.order"
+                    "RETURN s.name AS name, s.filePath AS filePath, r.step AS step "
+                    "ORDER BY r.step"
                 ),
                 "repo": repo_name,
             })
             return str(raw)
         except Exception as e:
-            return f"Error fetching process '{process_name}': {e}"
+            return f"Error fetching process '{process_id}': {e}"
 
     return [
         StructuredTool.from_function(
@@ -508,7 +512,7 @@ def make_process_tools(
             name="get_process",
             description=(
                 "Get the full execution flow for a specific process. "
-                "Pass the process name as returned by list_processes."
+                "Pass the process id (e.g. 'proc_0_index') as returned by list_processes."
             ),
         ),
     ]
