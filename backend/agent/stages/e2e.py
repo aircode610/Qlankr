@@ -151,21 +151,23 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     # When no processes exist, give a focused instruction that doesn't
     # contradict the "no processes" clause by asking to fetch process details.
+    # Graph tools (cypher/impact/query) are still useful for code structure
+    # (symbols, callers, blast radius) — only Process-node queries fail.
     if process_count_in_graph == 0:
         human_message = HumanMessage(content=(
             f"{processes_clause}\n\n"
             f"Affected components:\n{components_block}\n\n"
             f"{files_clause}\n"
             f"{diff_section}"
+            f"{repo_clause}\n"
             f"{context_clause}\n\n"
-            "Generate E2E test plans directly from the affected components and PR diff above. "
+            "Generate E2E test plans from the affected components and PR diff above. "
             "For each component, create at least one plan describing user-facing test steps "
             "that exercise the changed functionality end-to-end. "
-            "Do NOT call cypher, impact, or query — there is no process data to find. "
+            "You CAN use cypher/impact/query to understand code structure (symbols, callers, "
+            "blast radius), but do NOT query for Process nodes — they don't exist. "
             "Call submit_e2e_plans with all plans when done."
         ))
-        # Strip graph tools — they will only waste budget on Binder exceptions
-        stage_tools = [t for t in stage_tools if t.name not in ("cypher", "impact", "query")]
     else:
         human_message = HumanMessage(content=(
             f"{processes_clause}\n"
