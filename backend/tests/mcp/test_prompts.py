@@ -72,7 +72,7 @@ def test_unit_prompt_excludes_integration_only_tools():
 # ── Budget numbers appear in each stage prompt ────────────────────────────────
 
 @pytest.mark.parametrize("prompt,budget,name", [
-    (GATHER_PROMPT, "10", "GATHER_PROMPT"),
+    (GATHER_PROMPT, "15", "GATHER_PROMPT"),
     (UNIT_PROMPT, "15", "UNIT_PROMPT"),
     (INTEGRATION_PROMPT, "15", "INTEGRATION_PROMPT"),
     (E2E_PROMPT, "20", "E2E_PROMPT"),

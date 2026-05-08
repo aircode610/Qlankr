@@ -160,6 +160,21 @@ export async function getGraph(owner: string, repo: string): Promise<NormalisedG
   return normaliseBackendGraph(raw);
 }
 
+export interface IndexedRepoInfo {
+  repo: string;      // "owner/repo"
+  files: number;
+  clusters: number;
+  symbols: number;
+}
+
+/** List all repos already indexed on the backend */
+export async function getIndexedRepos(): Promise<IndexedRepoInfo[]> {
+  const response = await fetch(buildUrl('/repos'));
+  if (!response.ok) throw new Error(await readErrorText(response));
+  const j = (await response.json()) as { repos: IndexedRepoInfo[] };
+  return j.repos;
+}
+
 /** Fetch file content from the indexed repo */
 export async function getFileContent(owner: string, repo: string, path: string): Promise<{ path: string; content: string; language: string }> {
   const response = await fetch(buildUrl(`/file-content/${owner}/${repo}?path=${encodeURIComponent(path)}`));

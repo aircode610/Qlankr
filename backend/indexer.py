@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pathlib
 import re
 import sys
 import tempfile
@@ -17,8 +18,66 @@ from models import (
     IndexStepEvent,
 )
 
-# In-memory registry: { "owner/repo": { "path": str, "repo_name": str, "graph": GraphData | None } }
+# In-memory registry: { "owner/repo": { "path": str, "repo_name": str, "graph": GraphData | None, "stats": dict } }
 _registry: dict[str, dict] = {}
+
+# Disk persistence — survives process restarts
+_REGISTRY_DIR = pathlib.Path.home() / ".qlankr"
+_REGISTRY_FILE = _REGISTRY_DIR / "registry.json"
+
+
+def _load_registry() -> None:
+    """Load persisted registry from disk on startup."""
+    if not _REGISTRY_FILE.exists():
+        return
+    try:
+        data = json.loads(_REGISTRY_FILE.read_text())
+        for key, entry in data.items():
+            clone_path = entry.get("path") or ""
+            _registry[key] = {
+                "path": clone_path if clone_path and os.path.isdir(clone_path) else None,
+                "repo_name": entry.get("repo_name", ""),
+                "graph": None,  # re-fetched lazily from GitNexus MCP
+                "stats": entry.get("stats", {}),
+            }
+        print(f"[indexer] loaded {len(_registry)} repos from registry", flush=True)
+    except Exception as e:
+        print(f"[indexer] failed to load registry: {e}", flush=True)
+
+
+def _save_registry() -> None:
+    """Persist registry metadata to disk (excludes graph data — too large)."""
+    try:
+        _REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
+        serializable = {
+            key: {
+                "path": entry.get("path"),
+                "repo_name": entry.get("repo_name"),
+                "stats": entry.get("stats", {}),
+            }
+            for key, entry in _registry.items()
+        }
+        _REGISTRY_FILE.write_text(json.dumps(serializable, indent=2))
+    except Exception as e:
+        print(f"[indexer] failed to save registry: {e}", flush=True)
+
+
+def list_indexed_repos() -> list[dict]:
+    """Return metadata for all repos that have been indexed."""
+    result = []
+    for repo_key, entry in _registry.items():
+        stats = entry.get("stats", {})
+        result.append({
+            "repo": repo_key,
+            "files": stats.get("files", 0),
+            "clusters": stats.get("communities", 0),
+            "symbols": stats.get("nodes", 0),
+        })
+    return result
+
+
+# Load on module import
+_load_registry()
 
 _STAGE_KEYWORDS: list[tuple[str, str]] = [
     ("clone", "clone"),
@@ -130,12 +189,15 @@ async def index_repo(
         "path": clone_path,
         "repo_name": repo,
         "graph": None,
+        "stats": {},
     }
 
     # ── Fetch stats + graph via MCP ────────────────────────────────────────────
     yield IndexStepEvent(stage="analyze", summary="Fetching graph data from GitNexus?")
     stats, graph = await _fetch_stats_and_graph(repo)
     _registry[repo_key]["graph"] = graph
+    _registry[repo_key]["stats"] = stats
+    _save_registry()
 
     yield IndexDoneEvent(
         repo=repo_key,

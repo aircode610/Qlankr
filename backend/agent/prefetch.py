@@ -92,7 +92,8 @@ async def _fetch_processes(client, tool_map: dict, repo_name: str) -> list[dict]
         raw = await tool_map["cypher"].ainvoke({
             "query": (
                 "MATCH (p:Process) "
-                "RETURN p.name AS name, p.description AS description "
+                "RETURN p.id AS id, p.label AS name, p.stepCount AS stepCount, "
+                "p.processType AS processType "
                 "LIMIT 100"
             ),
             "repo": repo_name,

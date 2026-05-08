@@ -17,14 +17,36 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
-from agent.tools import filter_tools, get_mcp_client, safe_tools, make_process_tools
+from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_budget_warning_hook, make_messages_modifier, make_process_tools, safe_tools
 
 if TYPE_CHECKING:
     from agent.agent import AnalysisState
 
 BUDGET = 20
+
+
+class _E2EStep(BaseModel):
+    step: int
+    action: str
+    expected: str
+
+
+class _E2ETestPlan(BaseModel):
+    process: str
+    scenario: str
+    preconditions: str = ""
+    steps: list[_E2EStep]
+    affected_by_pr: list[str] = Field(default_factory=list)
+    priority: str = "MEDIUM"
+    estimated_duration: str = "5 min"
+
+
+class _E2EOutput(BaseModel):
+    """Container for structured output fallback."""
+    e2e_test_plans: list[_E2ETestPlan] = Field(min_length=1)
 
 
 async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
@@ -34,12 +56,23 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     repo_name = state.get("repo_name")
     if repo_name:
-        stage_tools = stage_tools + make_process_tools(repo_name)
+        stage_tools = stage_tools + make_process_tools(repo_name, all_tools=all_tools)
 
     e2e_results: list[dict] = []
 
-    def submit_e2e_plans(e2e_test_plans: list) -> str:
-        e2e_results.extend(e2e_test_plans)
+    def submit_e2e_plans(e2e_test_plans: list | None = None) -> str:
+        if not e2e_test_plans:
+            return (
+                "REJECTED: e2e_test_plans is empty or missing. "
+                "You MUST generate at least one E2E test plan. "
+                "If no processes were found in the graph, create plans directly from "
+                "the changed files and PR diff — use the file list you already have. "
+                "Each plan needs: process (use the file/feature name), scenario, "
+                "preconditions, steps [{step, action, expected}], affected_by_pr, "
+                "priority, estimated_duration. "
+                "Call submit_e2e_plans again with a non-empty list."
+            )
+        e2e_results.extend(e2e_test_plans)  # type: ignore[arg-type]
         return "E2E test plans recorded."
 
     submit_tool = StructuredTool.from_function(
@@ -62,11 +95,30 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     # Processes already pre-fetched in gather stage
     processes = state.get("processes", [])
-    processes_clause = (
-        "Pre-fetched processes: " + ", ".join(p.get("name", "") for p in processes[:20])
-        if processes
-        else "No processes pre-fetched — use list_processes tool to discover them."
-    )
+    process_count_in_graph = state.get("repo_stats", {}).get("processes", 0)
+
+    if process_count_in_graph == 0:
+        print(
+            "  [e2e] WARNING: repo_stats.processes=0 — no Process nodes in graph. "
+            "E2E plans will be derived from PR diff only.",
+            flush=True,
+        )
+        processes_clause = (
+            "NO PROCESSES FOUND: The knowledge graph contains no indexed execution flows "
+            f"for repo '{repo_name}'. Do NOT call list_processes — it will fail. "
+            "Instead, generate E2E test plans directly from the changed files listed below. "
+            "Use the feature/module name of each changed file as the 'process' field."
+        )
+    elif processes:
+        processes_clause = (
+            "Pre-fetched processes: " + ", ".join(p.get("name", "") for p in processes[:20])
+        )
+    else:
+        # Graph has processes but pre-fetch failed — let the agent discover them
+        processes_clause = (
+            f"Graph has {process_count_in_graph} indexed processes but pre-fetch failed. "
+            "Use list_processes tool to discover them."
+        )
 
     # User context (optional bug report / scenario)
     user_context = state.get("user_context")
@@ -80,28 +132,74 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     affected_files = [f for c in components for f in c.get("files_changed", [])]
     files_clause = f"Changed files: {', '.join(affected_files[:20])}" if affected_files else ""
 
+    # Include a diff snippet so the agent knows what actually changed
+    pr_diff = state.get("pr_diff", "")
+    diff_section = (
+        f"\n## PR Diff\n```\n{pr_diff[:4000]}\n```\n"
+        if pr_diff
+        else ""
+    )
+
+    components_block = "\n".join(
+        f"- {c.get('component')}: {', '.join(c.get('files_changed', []))}"
+        for c in components
+    )
+
     _saver = MemorySaver()
     _thread = f"{state.get('session_id', state.get('pr_url', 'anon'))}-e2e-{uuid4().hex[:8]}"
     _stage_config = {"configurable": {"thread_id": _thread}, "recursion_limit": 50}
 
-    human_message = HumanMessage(content=(
-        f"{processes_clause}\n"
-        f"{files_clause}\n"
-        f"{repo_clause}"
-        f"{context_clause}\n\n"
-        "Identify which processes are affected by these file changes, "
-        "fetch their details, and generate E2E test plans. "
-        "Call submit_e2e_plans with all plans when done."
-    ))
+    # When no processes exist, give a focused instruction that doesn't
+    # contradict the "no processes" clause by asking to fetch process details.
+    # Graph tools (cypher/impact/query) are still useful for code structure
+    # (symbols, callers, blast radius) — only Process-node queries fail.
+    if process_count_in_graph == 0:
+        human_message = HumanMessage(content=(
+            f"{processes_clause}\n\n"
+            f"Affected components:\n{components_block}\n\n"
+            f"{files_clause}\n"
+            f"{diff_section}"
+            f"{repo_clause}\n"
+            f"{context_clause}\n\n"
+            "Generate E2E test plans from the affected components and PR diff above. "
+            "For each component, create at least one plan describing user-facing test steps "
+            "that exercise the changed functionality end-to-end. "
+            "You CAN use cypher/impact/query to understand code structure (symbols, callers, "
+            "blast radius), but do NOT query for Process nodes — they don't exist. "
+            "Call submit_e2e_plans with all plans when done."
+        ))
+    else:
+        human_message = HumanMessage(content=(
+            f"{processes_clause}\n"
+            f"{files_clause}\n"
+            f"{repo_clause}"
+            f"{context_clause}\n\n"
+            "Identify which processes are affected by these file changes, "
+            "fetch their details, and generate E2E test plans. "
+            "Call submit_e2e_plans with all plans when done."
+        ))
 
     agent = create_react_agent(
         model=llm,
         tools=stage_tools + [submit_tool],
         prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
         checkpointer=_saver,
+        pre_model_hook=make_budget_warning_hook(
+            budget=BUDGET,
+            base_hook=make_messages_modifier(),
+        ),
     )
 
     tool_call_count = 0
+    pending_tools = 0   # tracks how many parallel tool calls are mid-flight
+    budget_reached = False
+    submit_rejections = 0
+    MAX_SUBMIT_REJECTIONS = 3
+    # Reserve calls for submit — cut off research early so the fallback has room.
+    # The agent fires parallel batches of 5+, so the actual count at break time
+    # will be RESEARCH_LIMIT + (batch_size - 1) in the worst case.
+    RESEARCH_LIMIT = BUDGET - 8
+
     async for event in agent.astream_events(
         {"messages": [human_message]},
         version="v2",
@@ -109,32 +207,92 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     ):
         event_type = event["event"]
         if event_type == "on_tool_start":
+            pending_tools += 1
             tool_call_count += 1
             print(f"  [e2e {tool_call_count}/{BUDGET}] {event['name']}", flush=True)
-            if event["name"] != "submit_e2e_plans" and tool_call_count >= BUDGET:
+            if event["name"] != "submit_e2e_plans" and tool_call_count >= RESEARCH_LIMIT:
+                budget_reached = True
+        elif event_type == "on_tool_end":
+            pending_tools = max(0, pending_tools - 1)
+            if event.get("name") == "submit_e2e_plans":
+                # Only break if submit actually recorded data — rejection
+                # returns guidance the agent can use to retry.
+                if e2e_results:
+                    break
+                submit_rejections += 1
+                print(f"  [e2e] submit_e2e_plans rejected ({submit_rejections}/{MAX_SUBMIT_REJECTIONS})", flush=True)
+                if submit_rejections >= MAX_SUBMIT_REJECTIONS:
+                    break
+            elif budget_reached and pending_tools == 0:
                 break
-        elif event_type == "on_tool_end" and event.get("name") == "submit_e2e_plans":
-            break
 
     if not e2e_results:
         print(f"  [e2e] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
-        agent_state = await agent.aget_state(_stage_config)
-        accumulated = agent_state.values.get("messages", [])
-        submit_agent = create_react_agent(
-            model=llm,
-            tools=[submit_tool],
-            prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
-        )
-        async for _ in submit_agent.astream_events(
-            {"messages": accumulated + [HumanMessage(content=(
-                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
-                "Call submit_e2e_plans NOW with all E2E test plans from your analysis. "
-                "Use priority='LOW' for any plans with incomplete process details."
-            ))]},
-            version="v2",
-            config={"recursion_limit": 5},
-        ):
-            pass
+
+        if process_count_in_graph == 0:
+            # No processes — build a short, self-contained synthesis message from
+            # state data (accumulated messages are just cypher errors / noise).
+            pr_diff = state.get("pr_diff", "")
+            diff_snippet = f"\n## PR Diff\n```\n{pr_diff[:3000]}\n```" if pr_diff else ""
+            components_block = "\n".join(
+                f"- {c.get('component')}: {', '.join(c.get('files_changed', []))}"
+                for c in components
+            )
+            synthesis_messages = [HumanMessage(content=(
+                "No execution flows exist in the knowledge graph for this repo.\n\n"
+                f"Affected components:\n{components_block}\n"
+                f"{files_clause}\n"
+                f"{diff_snippet}\n\n"
+                "Generate one E2E test plan per component from the above. Each plan needs: "
+                "process (component name), scenario, preconditions, "
+                "steps [{step, action, expected}], affected_by_pr (list of files), "
+                "priority ('MEDIUM' unless obviously critical), estimated_duration."
+            ))]
+        else:
+            # Build a clean synthesis context from state data instead of passing
+            # 30 noisy accumulated messages that the LLM can't synthesize from.
+            pr_diff = state.get("pr_diff", "")
+            diff_snippet = f"\n## PR Diff\n```\n{pr_diff[:3000]}\n```" if pr_diff else ""
+            process_names = ", ".join(p.get("name", p.get("label", "?")) for p in processes[:15])
+            synthesis_messages = [HumanMessage(content=(
+                f"Budget exhausted after {tool_call_count} tool calls.\n\n"
+                f"Pre-fetched processes: {process_names}\n\n"
+                f"Affected components:\n{components_block}\n\n"
+                f"{files_clause}\n"
+                f"{diff_snippet}\n\n"
+                "Generate E2E test plans from the above. For each affected component, "
+                "create at least one plan with: process (use process label or component name), "
+                "scenario, preconditions, steps [{step, action, expected}], "
+                "affected_by_pr (list of changed files), "
+                "priority ('MEDIUM' unless obviously critical), estimated_duration."
+            ))]
+
+        # Use a direct LLM call with explicit max_tokens and JSON instructions.
+        # with_structured_output() loses bind(max_tokens=...) and hits the default
+        # 4096 token limit, truncating the response to {}.
+        try:
+            response = await llm.ainvoke(
+                [SystemMessage(content=(
+                    "You are a JSON generator. Return ONLY a valid JSON object, no markdown, "
+                    "no explanation, no code fences. The object must have a single key "
+                    "'e2e_test_plans' containing a non-empty array of test plans."
+                ))]
+                + synthesis_messages
+                + [HumanMessage(content=(
+                    "Return the E2E test plans as a JSON object: "
+                    '{"e2e_test_plans": [{"process": "...", "scenario": "...", '
+                    '"preconditions": "...", "steps": [{"step": 1, "action": "...", '
+                    '"expected": "..."}], "affected_by_pr": [...], "priority": "MEDIUM", '
+                    '"estimated_duration": "5 min"}]}. Return ONLY the JSON.'
+                ))],
+                max_tokens=16384,
+            )
+            import json
+            data = json.loads(response.content)
+            output = _E2EOutput.model_validate(data)
+            e2e_results.extend([plan.model_dump() for plan in output.e2e_test_plans])
+        except Exception as e:
+            print(f"  [e2e] structured output fallback failed: {e}", flush=True)
 
     return {
         "tool_calls_used": state.get("tool_calls_used", 0) + tool_call_count,

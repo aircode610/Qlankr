@@ -41,8 +41,9 @@ E2E_TOOLS: set[str] = {
     "impact",
     "query",
     "cypher",
-    "list_processes",
-    "get_process",
+    # list_processes and get_process are injected via make_process_tools()
+    # with repo_name baked in. Including them here too would give the LLM
+    # two tools with the same name — one requiring repo= and one not.
 }
 
 # ── Bug reproduction stage tool subsets ──────────────────────────────────────
@@ -371,6 +372,48 @@ def make_messages_modifier(max_chars: int = _TOOL_OUTPUT_MAX_CHARS):
     return _hook
 
 
+def make_budget_warning_hook(
+    budget: int,
+    base_hook=None,
+    threshold_pct: float = 0.50,
+):
+    """
+    Return a pre_model_hook that injects a one-time budget warning when the
+    ToolMessage count exceeds *threshold_pct* of *budget*.
+
+    If *base_hook* is provided, it is applied first (e.g. the truncation hook
+    from ``make_messages_modifier()``).
+    """
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    _warned = [False]
+    threshold = int(budget * threshold_pct)
+
+    def _hook(state: dict) -> dict:
+        # Apply base hook first (e.g. truncation)
+        base_result = base_hook(state) if base_hook else {}
+        messages = base_result.get("messages", state.get("messages", []))
+
+        if _warned[0]:
+            return base_result
+
+        tool_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+        if tool_count >= threshold:
+            _warned[0] = True
+            warning = HumanMessage(content=(
+                f"BUDGET WARNING: You have used {tool_count} of {budget} tool calls. "
+                "STOP all research immediately. Synthesize your findings and call "
+                "the submit tool NOW with what you have. Do not make any more "
+                "research tool calls. Use confidence/priority='LOW' for anything "
+                "not fully analyzed."
+            ))
+            return {"messages": messages + [warning]}
+
+        return base_result
+
+    return _hook
+
+
 def fix_dangling_tool_calls(messages: list) -> list:
     """
     After a budget break the last AIMessage may contain tool_calls that never
@@ -421,44 +464,81 @@ def filter_tools(all_tools: list, stage: str) -> list:
     return [t for t in all_tools if t.name in allowed]
 
 
-def make_process_tools(repo_name: str) -> list[StructuredTool]:
+def _escape_cypher_string(value: str) -> str:
+    """Escape a string for safe embedding in a Cypher single-quoted literal."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def make_process_tools(
+    repo_name: str,
+    all_tools: list | None = None,
+) -> list[StructuredTool]:
     """
     Create two StructuredTools that expose GitNexus process resources.
 
-    Each tool opens its own MCP client context when invoked, so they remain
-    usable after the call site's context has exited.
-
-    Tries MCP resource reads first; falls back to Cypher queries if the
-    adapter raises on resource reads.
+    When *all_tools* is provided (the list returned by ``client.get_tools()``),
+    the closures reuse the existing ``cypher`` tool directly — no new MCP
+    client is spawned per invocation.  If *all_tools* is ``None`` (backward
+    compat), falls back to creating a fresh client each time.
 
     Args:
         repo_name: The GitNexus repo name (e.g. "minetest").
+        all_tools: Pre-loaded tool list from the stage's MCP client.
 
     Returns:
         [list_processes_tool, get_process_tool]
     """
+    # Build a tool map once — avoids O(n) scan on every call.
+    _tool_map: dict | None = None
+    if all_tools is not None:
+        _tool_map = {t.name: t for t in all_tools}
+
+    async def _get_cypher_tool():
+        """Return the cypher tool, reusing the pre-loaded map when possible."""
+        if _tool_map is not None:
+            return _tool_map.get("cypher")
+        # Fallback: spawn a new client (expensive — avoid when possible)
+        client = get_mcp_client()
+        tools = await client.get_tools()
+        return {t.name: t for t in tools}.get("cypher")
 
     async def list_processes() -> str:
         """List all execution flows (processes) in the indexed repo."""
-        async with get_mcp_client() as client:
-            try:
-                result = await client.read_resource(
-                    f"gitnexus://repo/{repo_name}/processes"
-                )
-                return str(result)
-            except Exception:
-                return await _cypher_fallback_list_processes(client, repo_name)
+        cypher = await _get_cypher_tool()
+        if cypher is None:
+            return "[]"
+        try:
+            raw = await cypher.ainvoke({
+                "query": (
+                    "MATCH (p:Process) "
+                    "RETURN p.id AS id, p.label AS label, p.stepCount AS stepCount, "
+                    "p.processType AS processType LIMIT 100"
+                ),
+                "repo": repo_name,
+            })
+            return str(raw)
+        except Exception as e:
+            return f"Error fetching processes: {e}"
 
-    async def get_process(process_name: str) -> str:
-        """Get the full execution flow for a specific process by name."""
-        async with get_mcp_client() as client:
-            try:
-                result = await client.read_resource(
-                    f"gitnexus://repo/{repo_name}/process/{process_name}"
-                )
-                return str(result)
-            except Exception:
-                return await _cypher_fallback_get_process(client, repo_name, process_name)
+    async def get_process(process_id: str) -> str:
+        """Get the full execution flow for a specific process by its id."""
+        cypher = await _get_cypher_tool()
+        if cypher is None:
+            return "[]"
+        safe_id = _escape_cypher_string(process_id)
+        try:
+            raw = await cypher.ainvoke({
+                "query": (
+                    f"MATCH (p:Process {{id: '{safe_id}'}})<-[r:CodeRelation]-(s) "
+                    "WHERE r.type = 'STEP_IN_PROCESS' "
+                    "RETURN s.name AS name, s.filePath AS filePath, r.step AS step "
+                    "ORDER BY r.step"
+                ),
+                "repo": repo_name,
+            })
+            return str(raw)
+        except Exception as e:
+            return f"Error fetching process '{process_id}': {e}"
 
     return [
         StructuredTool.from_function(
@@ -474,46 +554,7 @@ def make_process_tools(repo_name: str) -> list[StructuredTool]:
             name="get_process",
             description=(
                 "Get the full execution flow for a specific process. "
-                "Pass the process name as returned by list_processes."
+                "Pass the process id (e.g. 'proc_0_index') as returned by list_processes."
             ),
         ),
     ]
-
-
-async def _cypher_fallback_list_processes(client: Any, repo_name: str) -> str:
-    """Fallback: fetch process list via Cypher when resource reads are unavailable."""
-    try:
-        tools = await client.get_tools()
-        tool_map = {t.name: t for t in tools}
-        if "cypher" not in tool_map:
-            return "[]"
-        raw = await tool_map["cypher"].ainvoke({
-            "query": "MATCH (p:Process) RETURN p.name AS name, p.description AS description LIMIT 100",
-            "repo": repo_name,
-        })
-        return str(raw)
-    except Exception as e:
-        return f"Error fetching processes: {e}"
-
-
-async def _cypher_fallback_get_process(
-    client: Any, repo_name: str, process_name: str
-) -> str:
-    """Fallback: fetch a single process's steps via Cypher."""
-    try:
-        tools = await client.get_tools()
-        tool_map = {t.name: t for t in tools}
-        if "cypher" not in tool_map:
-            return "[]"
-        raw = await tool_map["cypher"].ainvoke({
-            "query": (
-                f"MATCH (p:Process {{name: '{process_name}'}})<-[r:CodeRelation]-(s) "
-                "WHERE r.type = 'STEP_IN_PROCESS' "
-                "RETURN s.name AS name, s.filePath AS filePath, r.order AS order "
-                "ORDER BY r.order"
-            ),
-            "repo": repo_name,
-        })
-        return str(raw)
-    except Exception as e:
-        return f"Error fetching process '{process_name}': {e}"
