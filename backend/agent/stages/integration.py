@@ -169,7 +169,9 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
 
         # Build a clean synthesis context from state data instead of passing
         # noisy accumulated messages that the LLM can't synthesize from.
-        structured_llm = llm.with_structured_output(_IntegrationOutput)
+        # Increase max_tokens: integration specs with multiple modules easily
+        # exceed the default 4096 and get truncated to {}.
+        structured_llm = llm.bind(max_tokens=16384).with_structured_output(_IntegrationOutput)
         try:
             result = await structured_llm.ainvoke(
                 [SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}")]

@@ -375,7 +375,7 @@ def make_messages_modifier(max_chars: int = _TOOL_OUTPUT_MAX_CHARS):
 def make_budget_warning_hook(
     budget: int,
     base_hook=None,
-    threshold_pct: float = 0.75,
+    threshold_pct: float = 0.50,
 ):
     """
     Return a pre_model_hook that injects a one-time budget warning when the

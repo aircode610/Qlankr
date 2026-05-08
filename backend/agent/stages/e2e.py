@@ -265,7 +265,9 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
         # Use structured output instead of a full ReAct agent — one LLM call, no
         # tool overhead, Pydantic-validated response.
-        structured_llm = llm.with_structured_output(_E2EOutput)
+        # Increase max_tokens: E2E plans with multiple components and steps easily
+        # exceed the default 4096 and get truncated to {}.
+        structured_llm = llm.bind(max_tokens=16384).with_structured_output(_E2EOutput)
         try:
             result = await structured_llm.ainvoke(
                 [SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}")]
