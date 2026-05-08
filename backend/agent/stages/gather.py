@@ -101,11 +101,13 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
         affected_components: list,  # required — no default so JSON schema marks it mandatory
         pr_description: str = "",
         pr_author: str = "",
-        pr_files: list = [],
+        pr_files: list | None = None,
         pr_diff: str = "",
         pr_summary: str = "",
         pr_summary_detail: str | None = None,
     ) -> str:
+        if pr_files is None:
+            pr_files = []
         if not affected_components:
             files_hint = ", ".join(pr_files[:15]) if pr_files else "already fetched above"
             return (
@@ -205,12 +207,16 @@ async def run_gather(state: "AnalysisState", llm: Any) -> dict:
             pr_title: str = "",
             pr_description: str = "",
             pr_author: str = "",
-            pr_files: list = [],
+            pr_files: list | None = None,
             pr_diff: str = "",
-            affected_components: list = [],
+            affected_components: list | None = None,
             pr_summary: str = "",
             pr_summary_detail: str | None = None,
         ) -> str:
+            if pr_files is None:
+                pr_files = []
+            if affected_components is None:
+                affected_components = []
             results.append(_GatherOutput(
                 pr_title=pr_title,
                 pr_description=pr_description,

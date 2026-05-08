@@ -422,34 +422,77 @@ def filter_tools(all_tools: list, stage: str) -> list:
     return [t for t in all_tools if t.name in allowed]
 
 
-def make_process_tools(repo_name: str) -> list[StructuredTool]:
+def _escape_cypher_string(value: str) -> str:
+    """Escape a string for safe embedding in a Cypher single-quoted literal."""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def make_process_tools(
+    repo_name: str,
+    all_tools: list | None = None,
+) -> list[StructuredTool]:
     """
     Create two StructuredTools that expose GitNexus process resources.
 
-    Each tool opens its own MCP client context when invoked, so they remain
-    usable after the call site's context has exited.
-
-    Tries MCP resource reads first; falls back to Cypher queries if the
-    adapter raises on resource reads.
+    When *all_tools* is provided (the list returned by ``client.get_tools()``),
+    the closures reuse the existing ``cypher`` tool directly — no new MCP
+    client is spawned per invocation.  If *all_tools* is ``None`` (backward
+    compat), falls back to creating a fresh client each time.
 
     Args:
         repo_name: The GitNexus repo name (e.g. "minetest").
+        all_tools: Pre-loaded tool list from the stage's MCP client.
 
     Returns:
         [list_processes_tool, get_process_tool]
     """
+    # Build a tool map once — avoids O(n) scan on every call.
+    _tool_map: dict | None = None
+    if all_tools is not None:
+        _tool_map = {t.name: t for t in all_tools}
+
+    async def _get_cypher_tool():
+        """Return the cypher tool, reusing the pre-loaded map when possible."""
+        if _tool_map is not None:
+            return _tool_map.get("cypher")
+        # Fallback: spawn a new client (expensive — avoid when possible)
+        client = get_mcp_client()
+        tools = await client.get_tools()
+        return {t.name: t for t in tools}.get("cypher")
 
     async def list_processes() -> str:
         """List all execution flows (processes) in the indexed repo."""
-        # MultiServerMCPClient cannot be used as a context manager in 0.1.0+;
-        # go straight to the Cypher fallback which uses the valid get_tools() API.
-        client = get_mcp_client()
-        return await _cypher_fallback_list_processes(client, repo_name)
+        cypher = await _get_cypher_tool()
+        if cypher is None:
+            return "[]"
+        try:
+            raw = await cypher.ainvoke({
+                "query": "MATCH (p:Process) RETURN p.name AS name, p.description AS description LIMIT 100",
+                "repo": repo_name,
+            })
+            return str(raw)
+        except Exception as e:
+            return f"Error fetching processes: {e}"
 
     async def get_process(process_name: str) -> str:
         """Get the full execution flow for a specific process by name."""
-        client = get_mcp_client()
-        return await _cypher_fallback_get_process(client, repo_name, process_name)
+        cypher = await _get_cypher_tool()
+        if cypher is None:
+            return "[]"
+        safe_name = _escape_cypher_string(process_name)
+        try:
+            raw = await cypher.ainvoke({
+                "query": (
+                    f"MATCH (p:Process {{name: '{safe_name}'}})<-[r:CodeRelation]-(s) "
+                    "WHERE r.type = 'STEP_IN_PROCESS' "
+                    "RETURN s.name AS name, s.filePath AS filePath, r.order AS order "
+                    "ORDER BY r.order"
+                ),
+                "repo": repo_name,
+            })
+            return str(raw)
+        except Exception as e:
+            return f"Error fetching process '{process_name}': {e}"
 
     return [
         StructuredTool.from_function(
@@ -469,42 +512,3 @@ def make_process_tools(repo_name: str) -> list[StructuredTool]:
             ),
         ),
     ]
-
-
-async def _cypher_fallback_list_processes(client: Any, repo_name: str) -> str:
-    """Fallback: fetch process list via Cypher when resource reads are unavailable."""
-    try:
-        tools = await client.get_tools()
-        tool_map = {t.name: t for t in tools}
-        if "cypher" not in tool_map:
-            return "[]"
-        raw = await tool_map["cypher"].ainvoke({
-            "query": "MATCH (p:Process) RETURN p.name AS name, p.description AS description LIMIT 100",
-            "repo": repo_name,
-        })
-        return str(raw)
-    except Exception as e:
-        return f"Error fetching processes: {e}"
-
-
-async def _cypher_fallback_get_process(
-    client: Any, repo_name: str, process_name: str
-) -> str:
-    """Fallback: fetch a single process's steps via Cypher."""
-    try:
-        tools = await client.get_tools()
-        tool_map = {t.name: t for t in tools}
-        if "cypher" not in tool_map:
-            return "[]"
-        raw = await tool_map["cypher"].ainvoke({
-            "query": (
-                f"MATCH (p:Process {{name: '{process_name}'}})<-[r:CodeRelation]-(s) "
-                "WHERE r.type = 'STEP_IN_PROCESS' "
-                "RETURN s.name AS name, s.filePath AS filePath, r.order AS order "
-                "ORDER BY r.order"
-            ),
-            "repo": repo_name,
-        })
-        return str(raw)
-    except Exception as e:
-        return f"Error fetching process '{process_name}': {e}"

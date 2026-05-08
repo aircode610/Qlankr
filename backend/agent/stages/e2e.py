@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, E2E_PROMPT
 from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, make_process_tools, safe_tools
@@ -27,6 +28,27 @@ if TYPE_CHECKING:
 BUDGET = 20
 
 
+class _E2EStep(BaseModel):
+    step: int
+    action: str
+    expected: str
+
+
+class _E2ETestPlan(BaseModel):
+    process: str
+    scenario: str
+    preconditions: str = ""
+    steps: list[_E2EStep]
+    affected_by_pr: list[str] = Field(default_factory=list)
+    priority: str = "MEDIUM"
+    estimated_duration: str = "5 min"
+
+
+class _E2EOutput(BaseModel):
+    """Container for structured output fallback."""
+    e2e_test_plans: list[_E2ETestPlan] = Field(min_length=1)
+
+
 async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
     client = get_mcp_client()
     all_tools = await client.get_tools()
@@ -34,11 +56,11 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     repo_name = state.get("repo_name")
     if repo_name:
-        stage_tools = stage_tools + make_process_tools(repo_name)
+        stage_tools = stage_tools + make_process_tools(repo_name, all_tools=all_tools)
 
     e2e_results: list[dict] = []
 
-    def submit_e2e_plans(e2e_test_plans: list = []) -> str:
+    def submit_e2e_plans(e2e_test_plans: list | None = None) -> str:
         if not e2e_test_plans:
             return (
                 "REJECTED: e2e_test_plans is empty or missing. "
@@ -50,7 +72,7 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
                 "priority, estimated_duration. "
                 "Call submit_e2e_plans again with a non-empty list."
             )
-        e2e_results.extend(e2e_test_plans)
+        e2e_results.extend(e2e_test_plans)  # type: ignore[arg-type]
         return "E2E test plans recorded."
 
     submit_tool = StructuredTool.from_function(
@@ -157,23 +179,50 @@ async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
 
     if not e2e_results:
         print(f"  [e2e] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
-        agent_state = await agent.aget_state(_stage_config)
-        accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
-        submit_agent = create_react_agent(
-            model=llm,
-            tools=[submit_tool],
-            prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}"),
-        )
-        async for _ in submit_agent.astream_events(
-            {"messages": accumulated + [HumanMessage(content=(
+
+        if process_count_in_graph == 0:
+            # No processes — build a short, self-contained synthesis message from
+            # state data (accumulated messages are just cypher errors / noise).
+            pr_diff = state.get("pr_diff", "")
+            diff_snippet = f"\n## PR Diff\n```\n{pr_diff[:3000]}\n```" if pr_diff else ""
+            components_block = "\n".join(
+                f"- {c.get('component')}: {', '.join(c.get('files_changed', []))}"
+                for c in components
+            )
+            synthesis_messages = [HumanMessage(content=(
+                "No execution flows exist in the knowledge graph for this repo.\n\n"
+                f"Affected components:\n{components_block}\n"
+                f"{files_clause}\n"
+                f"{diff_snippet}\n\n"
+                "Generate one E2E test plan per component from the above. Each plan needs: "
+                "process (component name), scenario, preconditions, "
+                "steps [{step, action, expected}], affected_by_pr (list of files), "
+                "priority ('MEDIUM' unless obviously critical), estimated_duration."
+            ))]
+        else:
+            agent_state = await agent.aget_state(_stage_config)
+            accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
+            # Trim to the last 30 messages to keep context small.
+            accumulated = accumulated[-30:] if len(accumulated) > 30 else accumulated
+            synthesis_messages = accumulated + [HumanMessage(content=(
                 f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
-                "Call submit_e2e_plans NOW with all E2E test plans from your analysis. "
+                "Return all E2E test plans from your analysis as structured output. "
                 "Use priority='LOW' for any plans with incomplete process details."
-            ))]},
-            version="v2",
-            config={"recursion_limit": 25},
-        ):
-            pass
+            ))]
+
+        # Use structured output instead of a full ReAct agent — one LLM call, no
+        # tool overhead, Pydantic-validated response.
+        structured_llm = llm.with_structured_output(_E2EOutput)
+        try:
+            result = await structured_llm.ainvoke(
+                [SystemMessage(content=f"{BASE_PROMPT}\n\n{E2E_PROMPT}")]
+                + synthesis_messages,
+            )
+            e2e_results.extend(
+                [plan.model_dump() for plan in result.e2e_test_plans]
+            )
+        except Exception as e:
+            print(f"  [e2e] structured output fallback failed: {e}", flush=True)
 
     return {
         "tool_calls_used": state.get("tool_calls_used", 0) + tool_call_count,

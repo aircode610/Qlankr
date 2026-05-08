@@ -1,25 +1,20 @@
 import asyncio
 import os
 import re
-import sys
 import traceback
 import unicodedata
-from typing import Annotated, Any, AsyncIterator, TypedDict
+from typing import Any, AsyncIterator, TypedDict
 from uuid import uuid4
 
 from langchain_anthropic import ChatAnthropic
-from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field
 
 from agent.tools import get_mcp_client
 from indexer import get_repo_name
 from models import (
-    AffectedComponent,
     AgentStepEvent,
-    AnalyzeResponse,
     CheckpointEvent,
     ErrorEvent,
     ResultEvent,
@@ -323,55 +318,6 @@ _llm = ChatAnthropic(
 )
 
 
-# ── Submit tool schema ────────────────────────────────────────────────────────
-# Mirrors AnalyzeResponse but without agent_steps (we track that ourselves).
-# Claude calls this tool as its final action — the input IS the structured output.
-
-class _AnalysisResult(BaseModel):
-    pr_title: str
-    pr_url: str
-    pr_summary: str
-    affected_components: Annotated[list[AffectedComponent], Field(min_length=1)]
-
-
-def _make_submit_tool(result_holder: list[_AnalysisResult]) -> StructuredTool:
-    def submit_analysis(
-        pr_title: str,
-        pr_url: str,
-        pr_summary: str,
-        affected_components: list,
-    ) -> str:
-        try:
-            parsed = _AnalysisResult.model_validate(
-                {
-                    "pr_title": pr_title,
-                    "pr_url": pr_url,
-                    "pr_summary": pr_summary,
-                    "affected_components": affected_components,
-                }
-            )
-        except Exception as e:
-            return (
-                "submit_analysis rejected ? fix the payload and call submit_analysis again. "
-                f"Validation error: {e}"
-            )
-        result_holder.append(parsed)
-        return "Analysis submitted."
-
-    return StructuredTool.from_function(
-        func=submit_analysis,
-        name="submit_analysis",
-        description=(
-            "Submit the completed QA impact analysis. "
-            "Pass pr_title, pr_url, pr_summary, and affected_components (non-empty array). "
-            "Each component must include: component, files_changed, impact_summary, risks, confidence, "
-            "unit_tests (array of UnitTestSpec — may be empty), integration_tests (array of IntegrationTestSpec — may be empty). "
-            "Call exactly once with a valid payload when done — this is your ONLY way to return the result. "
-            "If you get a rejection message, correct the payload and call again."
-        ),
-    )
-
-
 # ── Entry points ─────────────────────────────────────────────────────────────
 
 async def run_agent(
@@ -636,7 +582,10 @@ def _tool_summary(tool_name: str, tool_input: dict) -> str:
         "context": lambda i: f"Getting caller/callee context for: {i.get('name', '')}",
         "query": lambda i: f"Semantic search: {i.get('query', '')}",
         "cypher": lambda i: f"Graph query: {str(i.get('query', ''))[:60]}",
-        "submit_analysis": lambda i: "Submitting QA impact analysis",
+        "submit_gather": lambda _: "Submitting gathered PR context",
+        "submit_unit_tests": lambda i: f"Submitting unit tests for {i.get('component', '?')}",
+        "submit_integration_tests": lambda _: "Submitting integration test specs",
+        "submit_e2e_plans": lambda _: "Submitting E2E test plans",
     }
     try:
         builder = builders.get(tool_name)

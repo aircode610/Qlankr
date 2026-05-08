@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel, Field
 
 from agent.prompts import BASE_PROMPT, INTEGRATION_PROMPT
 from agent.tools import filter_tools, fix_dangling_tool_calls, get_mcp_client, make_messages_modifier, safe_tools
@@ -25,6 +26,25 @@ if TYPE_CHECKING:
     from agent.agent import AnalysisState
 
 BUDGET = 15
+
+
+class _IntegrationTestCase(BaseModel):
+    name: str
+    scenario: str
+    expected: str
+
+
+class _IntegrationTestSpec(BaseModel):
+    integration_point: str
+    modules_involved: list[str]
+    test_cases: list[_IntegrationTestCase]
+    data_setup: str = ""
+    risk_level: str = "MEDIUM"
+
+
+class _IntegrationOutput(BaseModel):
+    """Container for structured output fallback."""
+    integration_tests: list[_IntegrationTestSpec] = Field(min_length=1)
 
 
 async def run_integration(state: "AnalysisState", llm: Any) -> dict:
@@ -38,7 +58,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
 
     integration_results: list[dict] = []
 
-    def submit_integration_tests(integration_tests: list = []) -> str:
+    def submit_integration_tests(integration_tests: list | None = None) -> str:
         if not integration_tests:
             return (
                 "REJECTED: integration_tests is empty or missing. "
@@ -50,7 +70,7 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
                 "[{name, scenario, expected}], data_setup, risk_level. "
                 "Call submit_integration_tests again with a non-empty list."
             )
-        integration_results.extend(integration_tests)
+        integration_results.extend(integration_tests)  # type: ignore[arg-type]
         return "Integration tests recorded."
 
     submit_tool = StructuredTool.from_function(
@@ -135,35 +155,61 @@ async def run_integration(state: "AnalysisState", llm: Any) -> dict:
     if not integration_results:
         print(f"  [integration] budget hit without submit — forcing synthesis from {tool_call_count} calls", flush=True)
         agent_state = await agent.aget_state(_stage_config)
-        # Fix any dangling tool_calls left by the budget break before handing the
-        # history to the forced-submit agent — without this Anthropic rejects the request.
         accumulated = fix_dangling_tool_calls(agent_state.values.get("messages", []))
-        submit_agent = create_react_agent(
-            model=llm,
-            tools=[submit_tool],
-            prompt=SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}"),
-        )
-        async for _ in submit_agent.astream_events(
-            {"messages": accumulated + [HumanMessage(content=(
-                f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
-                "Call submit_integration_tests NOW with all integration points found. "
-                "Use risk_level='LOW' for any specs with incomplete evidence."
-            ))]},
-            version="v2",
-            config={"recursion_limit": 25},
-        ):
-            pass
+        # Trim to the last 30 messages — passing the full history risks sending 100K+
+        # tokens to Anthropic which causes the streaming connection to drop mid-response
+        # (RemoteProtocolError → CancelledError).
+        accumulated = accumulated[-30:] if len(accumulated) > 30 else accumulated
 
-    # Distribute integration specs back into affected_components by module name matching
+        # Use structured output instead of a full ReAct agent — one LLM call, no
+        # tool overhead, Pydantic-validated response.
+        structured_llm = llm.with_structured_output(_IntegrationOutput)
+        try:
+            result = await structured_llm.ainvoke(
+                [SystemMessage(content=f"{BASE_PROMPT}\n\n{INTEGRATION_PROMPT}")]
+                + accumulated
+                + [HumanMessage(content=(
+                    f"[BUDGET EXHAUSTED after {tool_call_count} tool calls] "
+                    "Return all integration test specs from your analysis as structured output. "
+                    "Use risk_level='LOW' for any specs with incomplete evidence."
+                ))],
+            )
+            integration_results.extend(
+                [spec.model_dump() for spec in result.integration_tests]
+            )
+        except Exception as e:
+            print(f"  [integration] structured output fallback failed: {e}", flush=True)
+
+    # Distribute integration specs back into affected_components.
+    # Uses token overlap (splitting on word boundaries) instead of pure substring
+    # matching so that "Bug Pipeline" matches module "bug_pipeline" or "pipeline".
+    # Any spec that matches no component is attached to ALL components so it is
+    # never silently dropped.
+
+    def _tokenize(text: str) -> set[str]:
+        return {w for w in text.lower().replace("_", " ").replace("-", " ").split() if len(w) > 1}
+
+    comp_tokens = [_tokenize(c.get("component", "")) for c in components]
+
+    assigned: set[int] = set()  # indices of specs that matched at least one component
     updated = []
-    for comp in components:
-        comp_name = comp.get("component", "").lower()
-        matched = [
-            spec for spec in integration_results
-            if any(m.lower() in comp_name or comp_name in m.lower()
-                   for m in spec.get("modules_involved", []))
-        ]
+    for ci, comp in enumerate(components):
+        matched = []
+        for si, spec in enumerate(integration_results):
+            spec_tokens: set[str] = set()
+            for mod in spec.get("modules_involved", []):
+                spec_tokens |= _tokenize(mod)
+            if spec_tokens & comp_tokens[ci]:
+                matched.append(spec)
+                assigned.add(si)
         updated.append({**comp, "integration_tests": matched})
+
+    # Attach unmatched specs to every component so nothing is silently lost.
+    unmatched = [s for i, s in enumerate(integration_results) if i not in assigned]
+    if unmatched:
+        print(f"  [integration] {len(unmatched)} spec(s) matched no component — attaching to all", flush=True)
+        for comp_dict in updated:
+            comp_dict["integration_tests"] = comp_dict["integration_tests"] + unmatched
 
     return {
         "tool_calls_used": state.get("tool_calls_used", 0) + tool_call_count,

@@ -60,13 +60,15 @@ def test_filter_tools_integration():
 
 
 def test_filter_tools_e2e():
+    # list_processes / get_process are injected via make_process_tools(), not
+    # in E2E_TOOLS, so they should NOT appear in filtered output.
     all_tools = make_tool_list(
         "impact", "query", "cypher", "list_processes", "get_process",
         "context", "get_pull_request",
     )
     result = filter_tools(all_tools, "e2e")
     names = {t.name for t in result}
-    assert names == {"impact", "query", "cypher", "list_processes", "get_process"}
+    assert names == {"impact", "query", "cypher"}
 
 
 def test_filter_tools_returns_empty_when_no_match():
@@ -108,11 +110,14 @@ def test_stage_sets_non_empty(stage, tool_set):
     assert len(tool_set) > 0
 
 
-# ── E2E stage includes process tools ─────────────────────────────────────────
+# ── E2E process tools are injected via make_process_tools, not in E2E_TOOLS ──
 
-def test_e2e_includes_process_tools():
-    assert "list_processes" in E2E_TOOLS
-    assert "get_process" in E2E_TOOLS
+def test_e2e_process_tools_not_in_static_set():
+    # list_processes / get_process are injected dynamically by e2e stage via
+    # make_process_tools() with repo_name baked in — keeping them in E2E_TOOLS
+    # too would expose duplicate tools with conflicting signatures.
+    assert "list_processes" not in E2E_TOOLS
+    assert "get_process" not in E2E_TOOLS
 
 
 # ── get_mcp_client() server config ───────────────────────────────────────────
