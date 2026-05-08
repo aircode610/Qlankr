@@ -8,6 +8,14 @@
 | Rejection message echoes back the file list | After a rejection the LLM was retrying blind with no new information; showing it the files it already fetched gives it the data to build components immediately. |
 | Rewrote `GATHER_PROMPT` — components first, graph calls capped at 5 | The old prompt had component-grouping as Step 4 after per-file graph calls; on an 18-file PR those calls ate the entire 15-call budget before Step 4 was reached. |
 
+# Forced-Submit Context Bloat Fix
+
+| Change | Why |
+|--------|-----|
+| `e2e.py` forced-submit — skip accumulated when `process_count == 0` | When no Process nodes exist, accumulated messages are just cypher errors and failed attempts — 100K+ tokens of noise. Passing them to the forced-submit agent caused Anthropic to drop the streaming connection mid-response (`RemoteProtocolError` → `CancelledError`). Now builds a short, self-contained synthesis message from state data (components + files + pr_diff snippet) instead. |
+| `e2e.py` forced-submit — trim accumulated to last 30 messages when processes exist | Even with processes, a full 20-call budget can accumulate 100K+ tokens. Trimming to the tail (where synthesis decisions live) keeps context small enough for a reliable Anthropic streaming response. |
+| `integration.py` forced-submit — same last-30 trim | Same context-bloat risk: 15 integration tool calls + large `impact`/`context`/`cypher` outputs can hit 100K+ tokens. |
+
 # E2E Process Graph Fixes
 
 | Change | Why |
