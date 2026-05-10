@@ -1,10 +1,12 @@
 from typing import Any, AsyncIterator
+from uuid import UUID
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
+from auth import get_current_user
 from export import export_markdown, export_pdf
 from indexer import get_clone_path, get_graph_data, index_repo, list_indexed_repos
 from agent.sessions import SessionType, get_session
@@ -52,22 +54,22 @@ async def health():
 
 
 @app.post("/index")
-async def index(request: IndexRequest):
+async def index(request: IndexRequest, user_id: UUID = Depends(get_current_user)):
     return StreamingResponse(
-        stream_response(index_repo(request.repo_url)),
+        stream_response(index_repo(user_id, request.repo_url)),
         media_type="text/event-stream",
     )
 
 
 @app.get("/repos")
-async def get_repos():
+async def get_repos(user_id: UUID = Depends(get_current_user)):
     """List all repos that have been indexed (persists across page reloads)."""
-    return {"repos": list_indexed_repos()}
+    return {"repos": list_indexed_repos(user_id)}
 
 
 @app.get("/graph/{owner}/{repo}")
-async def graph(owner: str, repo: str):
-    return await get_graph_data(owner, repo)
+async def graph(owner: str, repo: str, user_id: UUID = Depends(get_current_user)):
+    return await get_graph_data(user_id, owner, repo)
 
 
 # ── Debug endpoints (dev only) ────────────────────────────────────────────────
@@ -98,7 +100,7 @@ def _unwrap(raw) -> Any:
 
 
 @app.get("/debug/mcp/tools")
-async def debug_mcp_tools():
+async def debug_mcp_tools(user_id: UUID = Depends(get_current_user)):
     """List all MCP tools the backend can see."""
     from agent.tools import get_mcp_client
     client = get_mcp_client()
@@ -113,7 +115,7 @@ async def debug_mcp_tools():
 
 
 @app.get("/debug/mcp/repos")
-async def debug_mcp_repos():
+async def debug_mcp_repos(user_id: UUID = Depends(get_current_user)):
     """Call list_repos and return the raw parsed response."""
     from agent.tools import get_mcp_client
     client = get_mcp_client()
@@ -126,7 +128,7 @@ async def debug_mcp_repos():
 
 
 @app.post("/debug/mcp/call")
-async def debug_mcp_call(req: _DebugCallRequest):
+async def debug_mcp_call(req: _DebugCallRequest, user_id: UUID = Depends(get_current_user)):
     """Call any MCP tool with arbitrary args and return the raw response."""
     from agent.tools import get_mcp_client
     client = get_mcp_client()
@@ -142,12 +144,11 @@ async def debug_mcp_call(req: _DebugCallRequest):
 
 
 @app.get("/file-content/{owner}/{repo}")
-async def file_content(owner: str, repo: str, path: str):
+async def file_content(owner: str, repo: str, path: str, user_id: UUID = Depends(get_current_user)):
     """Return the text content of a file from the cloned repo."""
     import os
 
-    repo_key = f"{owner}/{repo}"
-    clone = get_clone_path(repo_key)
+    clone = get_clone_path(user_id, owner, repo)
     if not clone:
         raise HTTPException(status_code=404, detail="Repo not indexed")
 
@@ -172,7 +173,7 @@ async def file_content(owner: str, repo: str, path: str):
 
 
 @app.post("/analyze")
-async def analyze(req: AnalyzeRequest):
+async def analyze(req: AnalyzeRequest, user_id: UUID = Depends(get_current_user)):
     async def generate():
         from agent.agent import run_agent  # noqa: PLC0415
         async for event in run_agent(
@@ -186,7 +187,7 @@ async def analyze(req: AnalyzeRequest):
 
 
 @app.post("/analyze/{session_id}/continue")
-async def continue_analysis(session_id: str, req: ContinueRequest):
+async def continue_analysis(session_id: str, req: ContinueRequest, user_id: UUID = Depends(get_current_user)):
     from agent.agent import has_analysis_thread  # noqa: PLC0415
     if not has_analysis_thread(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
@@ -204,7 +205,7 @@ async def continue_analysis(session_id: str, req: ContinueRequest):
 
 
 @app.get("/analyze/{session_id}/status")
-async def analyze_session_status(session_id: str):
+async def analyze_session_status(session_id: str, user_id: UUID = Depends(get_current_user)):
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -215,7 +216,7 @@ async def analyze_session_status(session_id: str):
 
 
 @app.post("/bug-report")
-async def create_bug_report(req: BugReportRequest):
+async def create_bug_report(req: BugReportRequest, user_id: UUID = Depends(get_current_user)):
     async def generate():
         from agent.bug_agent import run_bug_report  # noqa: PLC0415
         async for event in run_bug_report(
@@ -232,7 +233,7 @@ async def create_bug_report(req: BugReportRequest):
 
 
 @app.post("/bug-report/{session_id}/continue")
-async def continue_bug_report_ep(session_id: str, req: BugContinueRequest):
+async def continue_bug_report_ep(session_id: str, req: BugContinueRequest, user_id: UUID = Depends(get_current_user)):
     async def generate():
         from agent.bug_agent import continue_bug_report  # noqa: PLC0415
         user_response: dict[str, Any] = {"action": req.action}
@@ -248,7 +249,7 @@ async def continue_bug_report_ep(session_id: str, req: BugContinueRequest):
 
 
 @app.get("/bug-report/{session_id}/status")
-async def bug_report_status(session_id: str):
+async def bug_report_status(session_id: str, user_id: UUID = Depends(get_current_user)):
     session = get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -258,7 +259,7 @@ async def bug_report_status(session_id: str):
 
 
 @app.post("/bug-report/{session_id}/export")
-async def export_bug_report_ep(session_id: str, req: ExportRequest):
+async def export_bug_report_ep(session_id: str, req: ExportRequest, user_id: UUID = Depends(get_current_user)):
     from models import BugReport  # noqa: PLC0415
 
     session = get_session(session_id)
@@ -295,7 +296,7 @@ async def export_bug_report_ep(session_id: str, req: ExportRequest):
 
 
 @app.get("/settings/integrations")
-async def get_integrations():
+async def get_integrations(user_id: UUID = Depends(get_current_user)):
     from models import IntegrationStatus  # noqa: PLC0415
 
     raw = await check_all_integrations()
@@ -305,7 +306,7 @@ async def get_integrations():
 
 
 @app.post("/settings/integrations")
-async def update_integration(req: IntegrationConfigRequest):
+async def update_integration(req: IntegrationConfigRequest, user_id: UUID = Depends(get_current_user)):
     merge_session_credentials(req.name, dict(req.credentials or {}))
     from models import IntegrationStatus  # noqa: PLC0415
 
@@ -317,7 +318,7 @@ async def update_integration(req: IntegrationConfigRequest):
 
 
 @app.post("/run-tests")
-async def run_tests(_req: RunTestsRequest):
+async def run_tests(_req: RunTestsRequest, user_id: UUID = Depends(get_current_user)):
     raise HTTPException(
         status_code=501,
         detail="Test execution runner is not enabled until Phase 4.",

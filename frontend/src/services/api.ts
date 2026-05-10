@@ -18,6 +18,14 @@ import type {
   IntegrationStatus,
   ResearchProgressEvent,
 } from './types';
+import { supabase } from "./supabase";
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) throw new Error("Not authenticated");
+  return { Authorization: `Bearer ${token}` };
+}
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -63,7 +71,7 @@ async function streamSsePost(
 ): Promise<void> {
   const response = await fetch(buildUrl(path), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers: { ...(await authHeaders()), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(payload),
     signal: opts.signal,
   });
@@ -154,7 +162,7 @@ function normaliseBackendGraph(raw: BackendGraphData): NormalisedGraph {
 
 /** Fetch and normalise the knowledge graph for a repo */
 export async function getGraph(owner: string, repo: string): Promise<NormalisedGraph> {
-  const response = await fetch(buildUrl(`/graph/${owner}/${repo}`));
+  const response = await fetch(buildUrl(`/graph/${owner}/${repo}`), { headers: { ...(await authHeaders()) } });
   if (!response.ok) throw new Error(await readErrorText(response));
   const raw = (await response.json()) as BackendGraphData;
   return normaliseBackendGraph(raw);
@@ -169,7 +177,7 @@ export interface IndexedRepoInfo {
 
 /** List all repos already indexed on the backend */
 export async function getIndexedRepos(): Promise<IndexedRepoInfo[]> {
-  const response = await fetch(buildUrl('/repos'));
+  const response = await fetch(buildUrl('/repos'), { headers: { ...(await authHeaders()) } });
   if (!response.ok) throw new Error(await readErrorText(response));
   const j = (await response.json()) as { repos: IndexedRepoInfo[] };
   return j.repos;
@@ -177,7 +185,7 @@ export async function getIndexedRepos(): Promise<IndexedRepoInfo[]> {
 
 /** Fetch file content from the indexed repo */
 export async function getFileContent(owner: string, repo: string, path: string): Promise<{ path: string; content: string; language: string }> {
-  const response = await fetch(buildUrl(`/file-content/${owner}/${repo}?path=${encodeURIComponent(path)}`));
+  const response = await fetch(buildUrl(`/file-content/${owner}/${repo}?path=${encodeURIComponent(path)}`), { headers: { ...(await authHeaders()) } });
   if (!response.ok) throw new Error(await readErrorText(response));
   return (await response.json()) as { path: string; content: string; language: string };
 }
@@ -419,7 +427,7 @@ export async function exportBugReport(
     ),
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
       body: JSON.stringify({ format, push_to_jira: false }),
     },
   );
@@ -434,7 +442,7 @@ export async function exportBugReport(
 }
 
 export async function getIntegrations(): Promise<IntegrationStatus[]> {
-  const response = await fetch(buildUrl('/settings/integrations'));
+  const response = await fetch(buildUrl('/settings/integrations'), { headers: { ...(await authHeaders()) } });
   if (!response.ok) {
     try {
       throw new Error((await response.text()) || `HTTP ${response.status}`);
@@ -452,7 +460,7 @@ export async function updateIntegration(
 ): Promise<IntegrationStatus[]> {
   const response = await fetch(buildUrl('/settings/integrations'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, credentials }),
   });
   if (!response.ok) {

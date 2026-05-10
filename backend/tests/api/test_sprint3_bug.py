@@ -8,7 +8,7 @@ from models import AffectedComponent, BugReport, E2ETestStep, ResearchFindings
 
 
 @pytest.mark.asyncio
-async def test_bug_report_streams_mocked():
+async def test_bug_report_streams_mocked(auth_user):
     async def fake_run(*args, **kwargs):
         from models import (
             BugReportResultEvent,
@@ -43,16 +43,17 @@ async def test_bug_report_streams_mocked():
             r = await client.post(
                 "/bug-report",
                 json={"description": "d"},
+                headers={"Authorization": "Bearer test"},
             )
     assert r.status_code == 200
     assert "text/event-stream" in (r.headers.get("content-type") or "")
 
 
 @pytest.mark.asyncio
-async def test_get_integrations_returns_six():
+async def test_get_integrations_returns_six(auth_user):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://t") as client:
-        r = await client.get("/settings/integrations")
+        r = await client.get("/settings/integrations", headers={"Authorization": "Bearer test"})
     assert r.status_code == 200
     j = r.json()
     assert "integrations" in j
