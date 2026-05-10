@@ -26,6 +26,40 @@ def merge_session_credentials(name: str, creds: dict[str, Any]) -> None:
     merge_credential_env(name)
 
 
+def hydrate_from_user_credentials(user_id) -> None:
+    """Load per-user credentials from Supabase and merge them into the process env.
+
+    Bridges the new BYO-credentials model (credentials.py) to the existing
+    env-var-based tool_health/tools machinery. Called by request handlers
+    before kicking off agent pipelines (Tasks 28/29).
+
+    Full per-user MCP-client isolation (Task 26 in the plan) is a follow-up;
+    today this still mutates os.environ, so concurrent requests from different
+    users in the same process can stomp each other's keys. Acceptable for the
+    initial small-team rollout per the spec's known limitations.
+    """
+    # Imported lazily to avoid a circular import at module load.
+    from credentials import load_credentials  # noqa: PLC0415
+
+    creds = load_credentials(user_id)
+    if creds.anthropic_api_key:
+        os.environ["ANTHROPIC_API_KEY"] = creds.anthropic_api_key
+    if creds.github_token:
+        os.environ["GITHUB_TOKEN"] = creds.github_token
+    if creds.jira:
+        merge_session_credentials("jira", dict(creds.jira))
+    if creds.notion:
+        merge_session_credentials("notion", dict(creds.notion))
+    if creds.confluence:
+        merge_session_credentials("confluence", dict(creds.confluence))
+    if creds.grafana:
+        merge_session_credentials("grafana", dict(creds.grafana))
+    if creds.kibana:
+        merge_session_credentials("kibana", dict(creds.kibana))
+    if creds.postman:
+        merge_session_credentials("postman", dict(creds.postman))
+
+
 def merge_credential_env(name: str) -> None:
     """After a single integration update, copy known keys into os.environ for the process.
 

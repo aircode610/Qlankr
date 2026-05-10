@@ -524,3 +524,88 @@ export async function deleteProject(id: string): Promise<void> {
   });
   if (!r.ok && r.status !== 204) throw new Error(`deleteProject ${r.status}`);
 }
+
+export type CredentialStatus = {
+  has_anthropic_api_key: boolean;
+  has_github_token: boolean;
+  integrations: Record<"jira" | "notion" | "confluence" | "grafana" | "kibana" | "postman", boolean>;
+};
+
+export async function getCredentialStatus(): Promise<CredentialStatus> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/settings/credentials`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`getCredentialStatus ${r.status}`);
+  return r.json();
+}
+
+export async function saveCredentials(body: Partial<{
+  anthropic_api_key: string;
+  github_token: string;
+  jira: object;
+  notion: object;
+  confluence: object;
+  grafana: object;
+  kibana: object;
+  postman: object;
+}>): Promise<void> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/settings/credentials`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok && r.status !== 204) throw new Error(`saveCredentials ${r.status}`);
+}
+
+export type PrAnalysisRow = {
+  id: string;
+  project_id: string;
+  pr_url: string;
+  pr_number: number | null;
+  pr_title: string | null;
+  status: "running" | "completed" | "failed" | "cancelled";
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type BugReportRow = {
+  id: string;
+  project_id: string;
+  bug_description: string;
+  severity: string | null;
+  status: "running" | "completed" | "failed" | "cancelled";
+  created_at: string;
+  completed_at: string | null;
+};
+
+export async function listPrAnalyses(projectId: string): Promise<PrAnalysisRow[]> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects/${projectId}/pr-analyses`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`listPrAnalyses ${r.status}`);
+  return r.json();
+}
+
+export async function listBugReports(projectId: string): Promise<BugReportRow[]> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects/${projectId}/bug-reports`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`listBugReports ${r.status}`);
+  return r.json();
+}
+
+export async function getPrAnalysis(id: string): Promise<PrAnalysisRow & Record<string, unknown>> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/pr-analyses/${id}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`getPrAnalysis ${r.status}`);
+  return r.json();
+}
+
+export async function getBugReport(id: string): Promise<BugReportRow & Record<string, unknown>> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/bug-reports/${id}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`getBugReport ${r.status}`);
+  return r.json();
+}

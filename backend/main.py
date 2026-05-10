@@ -371,3 +371,78 @@ async def run_tests(_req: RunTestsRequest, user_id: UUID = Depends(get_current_u
         status_code=501,
         detail="Test execution runner is not enabled until Phase 4.",
     )
+
+
+class UpdateCredentialsBody(BaseModel):
+    anthropic_api_key: str | None = None
+    github_token: str | None = None
+    jira: dict | None = None
+    notion: dict | None = None
+    confluence: dict | None = None
+    grafana: dict | None = None
+    kibana: dict | None = None
+    postman: dict | None = None
+
+
+@app.get("/settings/credentials")
+async def get_credentials(user_id: UUID = Depends(get_current_user)):
+    from credentials import load_credentials  # noqa: PLC0415
+
+    creds = load_credentials(user_id)
+    return {
+        "has_anthropic_api_key": creds.anthropic_api_key is not None,
+        "has_github_token": creds.github_token is not None,
+        "integrations": {
+            name: getattr(creds, name) is not None
+            for name in ("jira", "notion", "confluence", "grafana", "kibana", "postman")
+        },
+    }
+
+
+@app.post("/settings/credentials", status_code=204)
+async def post_credentials(body: UpdateCredentialsBody, user_id: UUID = Depends(get_current_user)):
+    from credentials import save_credentials  # noqa: PLC0415
+
+    updates = body.model_dump(exclude_none=True)
+    save_credentials(user_id, **updates)
+    return None
+
+
+@app.get("/projects/{project_id}/pr-analyses")
+async def list_pr_analyses(project_id: str, user_id: UUID = Depends(get_current_user)):
+    from db import user_scoped  # noqa: PLC0415
+
+    scoped = user_scoped(user_id)
+    res = scoped.table("pr_analyses").select("*").eq("project_id", project_id).order("created_at", desc=True).execute()
+    return res.data or []
+
+
+@app.get("/projects/{project_id}/bug-reports")
+async def list_bug_reports(project_id: str, user_id: UUID = Depends(get_current_user)):
+    from db import user_scoped  # noqa: PLC0415
+
+    scoped = user_scoped(user_id)
+    res = scoped.table("bug_reports").select("*").eq("project_id", project_id).order("created_at", desc=True).execute()
+    return res.data or []
+
+
+@app.get("/pr-analyses/{run_id}")
+async def get_pr_analysis(run_id: str, user_id: UUID = Depends(get_current_user)):
+    from db import user_scoped  # noqa: PLC0415
+
+    scoped = user_scoped(user_id)
+    rows = (scoped.table("pr_analyses").select("*").eq("id", run_id).execute().data) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="not found")
+    return rows[0]
+
+
+@app.get("/bug-reports/{run_id}")
+async def get_bug_report(run_id: str, user_id: UUID = Depends(get_current_user)):
+    from db import user_scoped  # noqa: PLC0415
+
+    scoped = user_scoped(user_id)
+    rows = (scoped.table("bug_reports").select("*").eq("id", run_id).execute().data) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="not found")
+    return rows[0]
