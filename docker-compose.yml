@@ -6,6 +6,11 @@ services:
     env_file:
       - .env
     environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - QLANKR_GRAPHS_ROOT=/data/graphs
+      # Legacy / fallback — moves to per-user storage during Phase 3 wiring.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
       - LANGSMITH_API_KEY=${LANGSMITH_API_KEY}
@@ -18,6 +23,7 @@ services:
       - LANGCHAIN_PROJECT=${LANGSMITH_PROJECT:-qlankr}
     volumes:
       - ./backend:/app          # live-reload Python changes without rebuild
+      - qlankr_graphs:/data/graphs   # per-user KuzuDB graphs persist across `docker compose down`
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:
@@ -30,6 +36,8 @@ services:
       - .env
     environment:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+      - VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+      - VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
     volumes:
       - ./frontend:/app/frontend          # live HMR for TS/TSX changes
       - /app/frontend/node_modules        # keep container's node_modules
@@ -43,6 +51,9 @@ services:
     env_file:
       - .env
     environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GITHUB_TOKEN=${GITHUB_TOKEN}
 
@@ -52,3 +63,6 @@ services:
       dockerfile: frontend/Dockerfile
     profiles: [test]
     command: sh -c "cd frontend && npm test"
+
+volumes:
+  qlankr_graphs:
