@@ -8,6 +8,7 @@ import { AuthCallbackPage } from "./pages/AuthCallbackPage";
 import { ProjectsListPage } from "./pages/ProjectsListPage";
 import { ProjectDetailLayout } from "./pages/ProjectDetailLayout";
 import { AppStateProvider } from "./hooks/useAppState";
+import { GraphCanvas } from "./components/GraphCanvas";
 
 export default function App() {
   return (
@@ -36,10 +37,13 @@ export default function App() {
                 </RequireAuth>
               }
             >
-              <Route index element={<div className="p-4 text-sm text-gray-500">Graph view (Task 23).</div>} />
-              <Route path="analyze" element={<div className="p-4">PR analysis (Task 23).</div>} />
-              <Route path="bugs" element={<div className="p-4">Bug reproduction (Task 23).</div>} />
-              <Route path="history" element={<div className="p-4">History (Task 31+).</div>} />
+              <Route index element={<GraphCanvas />} />
+              {/* PR analysis + bug reproduction need wrapper components that bind the existing
+                  PrAnalysisPanel/ResearchPanel to the analyze/bug data flows (currently held
+                  in LegacyApp.tsx). Follow-up task. */}
+              <Route path="analyze" element={<div className="p-4 text-sm text-gray-500">PR analysis — pending data-flow wrapper.</div>} />
+              <Route path="bugs" element={<div className="p-4 text-sm text-gray-500">Bug reproduction — pending data-flow wrapper.</div>} />
+              <Route path="history" element={<div className="p-4 text-sm text-gray-500">History (Task 31+).</div>} />
             </Route>
 
             <Route path="/" element={<Navigate to="/projects" replace />} />
