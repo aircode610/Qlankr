@@ -163,7 +163,6 @@ def _normalize_tool_names(tools: list) -> list:
 
 
 def _server_config() -> dict:
-    import shutil
     utf8_env = {
         **os.environ,
         "PYTHONUTF8": "1",
@@ -275,11 +274,17 @@ def _server_config() -> dict:
 
 def get_mcp_client() -> MultiServerMCPClient:
     """
-    Returns a MultiServerMCPClient instance configured with GitHub and GitNexus servers.
+    Returns a MultiServerMCPClient configured with all enabled MCP servers.
 
-    Usage (async context manager):
-        async with get_mcp_client() as client:
-            tools = await client.get_tools()
+    The client is stateless — each ``get_tools()`` or tool ``.ainvoke()`` call
+    spawns ephemeral server processes.  To avoid redundant spawning, call
+    ``get_tools()`` once per pipeline run and pass the list to stages.
+
+    Usage::
+
+        client = get_mcp_client()
+        tools = await client.get_tools()   # spawns servers, discovers tools, cleans up
+        # pass ``tools`` to stages — do NOT call get_tools() again per stage
     """
     return MultiServerMCPClient(_server_config())
 

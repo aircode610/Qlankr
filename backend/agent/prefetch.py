@@ -12,37 +12,43 @@ from indexer import _to_records, _unwrap_text  # noqa: PLC0415
 _EMPTY_RESULT: dict = {"processes": [], "stats": {}, "changed_symbols": []}
 
 
-async def prefetch_context(pr_url: str, repo_name: str | None) -> dict:
+async def prefetch_context(pr_url: str, repo_name: str | None, all_tools: list | None = None) -> dict:
     """
     Pre-fetch process list and repo stats from GitNexus before the agent runs.
 
     Args:
         pr_url:    GitHub PR URL (used for future symbol pre-fetch; unused here).
         repo_name: GitNexus repo name (e.g. "minetest"). If None, returns empty dicts.
+        all_tools: Pre-fetched tool list from the pipeline's MCP client.  When
+                   provided, avoids spawning all servers again just for prefetch.
 
     Returns:
         {
-            "processes":       list[dict]   ? [{name, description}, ...]
-            "stats":           dict         ? {files, nodes, edges, communities, processes}
-            "changed_symbols": list         ? [] (populated by the gather stage)
+            "processes":       list[dict]   — [{name, description}, ...]
+            "stats":           dict         — {files, nodes, edges, communities, processes}
+            "changed_symbols": list         — [] (populated by the gather stage)
         }
-        Always returns a valid dict ? never raises.
+        Always returns a valid dict — never raises.
     """
     if not repo_name:
         return dict(_EMPTY_RESULT)
 
     try:
-        return await _fetch(repo_name)
+        return await _fetch(repo_name, all_tools=all_tools)
     except Exception as exc:
         print(f"[prefetch] error for {repo_name}: {exc}", flush=True)
         return dict(_EMPTY_RESULT)
 
 
-async def _fetch(repo_name: str) -> dict:
+async def _fetch(repo_name: str, all_tools: list | None = None) -> dict:
     result: dict = {"processes": [], "stats": {}, "changed_symbols": []}
 
-    client = get_mcp_client()
-    tools = await client.get_tools()
+    if all_tools is not None:
+        tools = all_tools
+        client = get_mcp_client()  # needed for read_resource below
+    else:
+        client = get_mcp_client()
+        tools = await client.get_tools()
     tool_map = {t.name: t for t in tools}
 
     # ── Repo stats via list_repos ─────────────────────────────────────────────

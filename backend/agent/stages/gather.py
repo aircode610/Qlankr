@@ -77,10 +77,11 @@ def _extract_pr_metadata(messages: list) -> dict:
     return meta
 
 
-async def run_gather(state: "AnalysisState", llm: Any) -> dict:
-    print("[gather] starting MCP client...", flush=True)
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
+async def run_gather(state: "AnalysisState", llm: Any, all_tools: list | None = None) -> dict:
+    if all_tools is None:
+        print("[gather] starting MCP client (no pre-fetched tools)...", flush=True)
+        client = get_mcp_client()
+        all_tools = await client.get_tools()
     print(f"[gather] got {len(all_tools)} tools, filtering to gather stage...", flush=True)
     stage_tools = safe_tools(filter_tools(all_tools, "gather"))
 

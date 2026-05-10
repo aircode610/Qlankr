@@ -25,18 +25,16 @@ if TYPE_CHECKING:
 BUDGET = 5
 
 
-async def report_node(state: "BugReproductionState", llm: Any = None, client: Any = None) -> dict:
+async def report_node(state: "BugReproductionState", llm: Any = None, all_tools: list | None = None) -> dict:
     if llm is None:
         from agent.agent import _llm
         llm = _llm
 
-    _own_client = client is None
-    if _own_client:
-        print("[bug_report] starting MCP client...", flush=True)
+    if all_tools is None:
+        print("[bug_report] starting MCP client (no pre-fetched tools)...", flush=True)
         client = get_mcp_client()
-    all_tools = await client.get_tools()
-    if _own_client:
-        print(f"[bug_report] got {len(all_tools)} tools, filtering to bug_report stage...", flush=True)
+        all_tools = await client.get_tools()
+    print(f"[bug_report] got {len(all_tools)} tools, filtering to bug_report stage...", flush=True)
     stage_tools = safe_tools(filter_tools(all_tools, "bug_report"))
 
     class _ReportOutput(BaseModel):

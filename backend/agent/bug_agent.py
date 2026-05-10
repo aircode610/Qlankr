@@ -154,12 +154,12 @@ TIMEOUT_SECONDS = 600
 
 async def _triage_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_triage import triage_node
-    return await triage_node(state, _llm_light, _run_clients.get(state["session_id"]))
+    return await triage_node(state, _llm_light, all_tools=_run_tools.get(state["session_id"]))
 
 
 async def _mechanics_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_mechanics import mechanics_node
-    return await mechanics_node(state, _llm, _run_clients.get(state["session_id"]))
+    return await mechanics_node(state, _llm, all_tools=_run_tools.get(state["session_id"]))
 
 
 def _checkpoint_mechanics_node(state: BugReproductionState) -> dict:
@@ -200,14 +200,14 @@ def _checkpoint_mechanics_node(state: BugReproductionState) -> dict:
 
 async def _reproduction_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_reproduction import reproduction_node
-    client = _run_clients.get(state["session_id"])
-    print(f"[_reproduction_node] session_id={state['session_id']!r} client_present={client is not None}", flush=True)
-    return await reproduction_node(state, _llm, client)
+    tools = _run_tools.get(state["session_id"])
+    print(f"[_reproduction_node] session_id={state['session_id']!r} tools_present={tools is not None}", flush=True)
+    return await reproduction_node(state, _llm, all_tools=tools)
 
 
 async def _research_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_research import research_node
-    return await research_node(state, _llm, _run_clients.get(state["session_id"]))
+    return await research_node(state, _llm, all_tools=_run_tools.get(state["session_id"]))
 
 
 def _checkpoint_research_node(state: BugReproductionState) -> dict:
@@ -250,7 +250,7 @@ def _checkpoint_research_node(state: BugReproductionState) -> dict:
 
 async def _report_node(state: BugReproductionState) -> dict:
     from agent.stages.bug_report import report_node
-    return await report_node(state, _llm_light, _run_clients.get(state["session_id"]))
+    return await report_node(state, _llm_light, all_tools=_run_tools.get(state["session_id"]))
 
 
 # ── Routers ───────────────────────────────────────────────────────────────────
@@ -324,11 +324,14 @@ def _get_bug_graph():
 
 _bug_sessions: dict[str, dict] = {}
 
-# ── Shared MCP clients (one per active run, keyed by session_id) ──────────────
-# Created once in _start_bug_graph, reused across all stage nodes, cleaned up
-# after the stream ends. Eliminates repeated server spawning per stage.
+# ── Shared MCP tools (one get_tools() per active run, keyed by session_id) ────
+# Fetched once in _start_bug_graph, reused across all stage nodes, cleaned up
+# after the stream ends.  Eliminates repeated server spawning per stage.
+# NOTE: Storing the MultiServerMCPClient itself provides no benefit since the
+# client is stateless (each get_tools() / ainvoke() spawns ephemeral servers).
+# What matters is caching the *tool list* returned by get_tools().
 
-_run_clients: dict[str, Any] = {}
+_run_tools: dict[str, list] = {}
 
 
 # ── Entry points ──────────────────────────────────────────────────────────────
@@ -400,9 +403,17 @@ async def _start_bug_graph(
     thread_id = session_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
 
+    # Fetch MCP tools once for the entire pipeline run (prefetch + all stages)
+    from agent.tools import get_mcp_client
+    print("[bug_agent] fetching MCP tools for pipeline run...", flush=True)
+    client = get_mcp_client()
+    all_tools = await client.get_tools()
+    _run_tools[thread_id] = all_tools
+    print(f"[bug_agent] got {len(all_tools)} MCP tools", flush=True)
+
     from agent.prefetch import prefetch_context
 
-    pref = await prefetch_context(pr_url, repo_name)
+    pref = await prefetch_context(pr_url, repo_name, all_tools=all_tools)
     initial_state: BugReproductionState = {
         "description": description,
         "environment": environment,
@@ -427,16 +438,11 @@ async def _start_bug_graph(
     }
 
     _bug_sessions[thread_id] = {"description": description, "repo_name": repo_name, "emitted_stages": set()}
-
-    from agent.tools import get_mcp_client
-    print("[bug_agent] starting shared MCP client...", flush=True)
-    client = get_mcp_client()
-    _run_clients[thread_id] = client
     try:
         async for event in _stream_bug_graph(_get_bug_graph(), initial_state, config, thread_id):
             yield event
     finally:
-        _run_clients.pop(thread_id, None)
+        _run_tools.pop(thread_id, None)
 
 
 async def _resume_bug_graph(
@@ -449,16 +455,18 @@ async def _resume_bug_graph(
 
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
 
+    # Re-fetch MCP tools for the resume segment
     from agent.tools import get_mcp_client
     client = get_mcp_client()
-    _run_clients[session_id] = client
+    all_tools = await client.get_tools()
+    _run_tools[session_id] = all_tools
     try:
         async for event in _stream_bug_graph(
             _get_bug_graph(), Command(resume=user_response), config, session_id
         ):
             yield event
     finally:
-        _run_clients.pop(session_id, None)
+        _run_tools.pop(session_id, None)
 
 
 async def _stream_bug_graph(

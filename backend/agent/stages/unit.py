@@ -25,13 +25,15 @@ if TYPE_CHECKING:
 BUDGET = 15
 
 
-async def run_unit(state: "AnalysisState", llm: Any) -> dict:
+async def run_unit(state: "AnalysisState", llm: Any, all_tools: list | None = None) -> dict:
     components = state.get("affected_components", [])
     if not components:
         return {"current_stage": "checkpoint_unit"}
 
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
+    if all_tools is None:
+        print("[unit] starting MCP client (no pre-fetched tools)...", flush=True)
+        client = get_mcp_client()
+        all_tools = await client.get_tools()
     stage_tools = safe_tools(filter_tools(all_tools, "unit"))
 
     unit_results: dict[str, list] = {}

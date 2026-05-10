@@ -13,6 +13,12 @@ from langgraph.types import Command, interrupt
 
 from agent.tools import get_mcp_client
 from indexer import get_repo_name
+
+# ── Shared MCP tools (one fetch per active run, keyed by session_id) ─────────
+# Created once in _start_graph, reused across all stage nodes, cleaned up
+# after the stream ends.  Eliminates repeated get_tools() server spawning.
+
+_run_tools: dict[str, list] = {}
 from models import (
     AgentStepEvent,
     CheckpointEvent,
@@ -88,12 +94,12 @@ class BugReproductionState(TypedDict):
 
 async def gather_node(state: AnalysisState) -> dict:
     from agent.stages.gather import run_gather
-    return await run_gather(state, _llm)
+    return await run_gather(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 async def unit_tests_node(state: AnalysisState) -> dict:
     from agent.stages.unit import run_unit
-    return await run_unit(state, _llm)
+    return await run_unit(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 def checkpoint_node(state: AnalysisState) -> dict:
     """
@@ -200,12 +206,12 @@ def e2e_checkpoint_node(state: AnalysisState) -> dict:
 
 async def integration_tests_node(state: AnalysisState) -> dict:
     from agent.stages.integration import run_integration
-    return await run_integration(state, _llm)
+    return await run_integration(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 async def e2e_planning_node(state: AnalysisState) -> dict:
     from agent.stages.e2e import run_e2e
-    return await run_e2e(state, _llm)
+    return await run_e2e(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 def submit_node(state: AnalysisState) -> dict:
@@ -384,10 +390,18 @@ async def _start_graph(
     if owner_repo:
         repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
 
+    # Pre-fetch MCP tools once for the entire pipeline run.
+    # Stages reuse this list instead of each spawning all servers again.
+    print("[agent] fetching MCP tools for pipeline run...", flush=True)
+    client = get_mcp_client()
+    all_tools = await client.get_tools()
+    _run_tools[thread_id] = all_tools
+    print(f"[agent] got {len(all_tools)} MCP tools", flush=True)
+
     # Pre-fetch GitNexus process list + repo stats before graph starts
     # so gather/e2e stages don't waste tool call budget on basic context.
     from agent.prefetch import prefetch_context
-    prefetched = await prefetch_context(pr_url, repo_name)
+    prefetched = await prefetch_context(pr_url, repo_name, all_tools=all_tools)
 
     initial_state: AnalysisState = {
         "pr_url": pr_url,
@@ -411,8 +425,11 @@ async def _start_graph(
 
     _sessions[thread_id] = {"pr_url": pr_url, "repo_name": repo_name}
 
-    async for event in _stream_graph(_get_graph(), initial_state, config, thread_id, pr_url):
-        yield event
+    try:
+        async for event in _stream_graph(_get_graph(), initial_state, config, thread_id, pr_url):
+            yield event
+    finally:
+        _run_tools.pop(thread_id, None)
 
 
 async def _resume_graph(
@@ -426,10 +443,18 @@ async def _resume_graph(
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
     pr_url = _sessions[session_id].get("pr_url", "")
 
-    async for event in _stream_graph(
-        _get_graph(), Command(resume=user_response), config, session_id, pr_url
-    ):
-        yield event
+    # Re-fetch MCP tools for the resume segment
+    client = get_mcp_client()
+    all_tools = await client.get_tools()
+    _run_tools[session_id] = all_tools
+
+    try:
+        async for event in _stream_graph(
+            _get_graph(), Command(resume=user_response), config, session_id, pr_url
+        ):
+            yield event
+    finally:
+        _run_tools.pop(session_id, None)
 
 
 async def _stream_graph(
