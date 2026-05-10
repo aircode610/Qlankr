@@ -99,9 +99,11 @@
 Open `backend/requirements.txt` and append:
 
 ```
-supabase==2.9.1
-PyJWT==2.9.0
+supabase==2.30.0
+PyJWT==2.10.1
 ```
+
+(Note: pins chosen to coexist with existing transitive deps — `mcp` requires `pyjwt>=2.10.1`; `mcp-atlassian` requires `httpx>=0.28`, and `supabase==2.30.0` accepts `httpx>=0.26,<0.29`, so the resolver picks an `httpx 0.28.x`.)
 
 - [ ] **Step 2: Install locally and verify import**
 
