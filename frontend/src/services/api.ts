@@ -473,3 +473,54 @@ export async function updateIntegration(
   const j = (await response.json()) as { integrations: IntegrationStatus[] };
   return j.integrations;
 }
+
+// ── Task 21: Projects CRUD ───────────────────────────────────────
+
+export type Project = {
+  id: string;
+  user_id: string;
+  repo_url: string;
+  owner: string;
+  repo_name: string;
+  index_status: "pending" | "indexing" | "ready" | "failed" | "stale";
+  index_error?: string | null;
+  graph_stats?: { node_count?: number; edge_count?: number } | null;
+  last_indexed_at?: string | null;
+  created_at: string;
+};
+
+export type ProjectDetail = Project & { local_graph_present: boolean };
+
+export async function listProjects(): Promise<Project[]> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`listProjects ${r.status}`);
+  return r.json();
+}
+
+export async function createProject(repo_url: string): Promise<Project> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_url }),
+  });
+  if (!r.ok) throw new Error(`createProject ${r.status}`);
+  return r.json();
+}
+
+export async function getProject(id: string): Promise<ProjectDetail> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects/${id}`, {
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok) throw new Error(`getProject ${r.status}`);
+  return r.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects/${id}`, {
+    method: "DELETE",
+    headers: { ...(await authHeaders()) },
+  });
+  if (!r.ok && r.status !== 204) throw new Error(`deleteProject ${r.status}`);
+}
