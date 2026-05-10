@@ -1,3 +1,4 @@
+import shutil
 from typing import Any, AsyncIterator
 from uuid import UUID
 
@@ -8,7 +9,14 @@ from pydantic import BaseModel
 
 from auth import get_current_user
 from export import export_markdown, export_pdf
+from graph_paths import graph_dir
 from indexer import get_clone_path, get_graph_data, index_repo, list_indexed_repos
+from projects import (
+    create_project,
+    delete_project,
+    get_project,
+    list_projects,
+)
 from agent.sessions import SessionType, get_session
 from agent.tool_health import check_all_integrations, merge_session_credentials
 from models import (
@@ -70,6 +78,46 @@ async def get_repos(user_id: UUID = Depends(get_current_user)):
 @app.get("/graph/{owner}/{repo}")
 async def graph(owner: str, repo: str, user_id: UUID = Depends(get_current_user)):
     return await get_graph_data(user_id, owner, repo)
+
+
+# ── Projects CRUD ─────────────────────────────────────────────────────────────
+
+class CreateProjectBody(BaseModel):
+    repo_url: str
+
+
+@app.get("/projects")
+async def get_projects(user_id: UUID = Depends(get_current_user)):
+    return list_projects(user_id)
+
+
+@app.post("/projects", status_code=201)
+async def post_project(body: CreateProjectBody, user_id: UUID = Depends(get_current_user)):
+    try:
+        return create_project(user_id, body.repo_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/projects/{project_id}")
+async def get_project_detail(project_id: str, user_id: UUID = Depends(get_current_user)):
+    project = get_project(user_id, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="not found")
+    local_graph_present = graph_dir(user_id, project["owner"], project["repo_name"]).is_dir()
+    return {**project, "local_graph_present": local_graph_present}
+
+
+@app.delete("/projects/{project_id}", status_code=204)
+async def delete_project_endpoint(project_id: str, user_id: UUID = Depends(get_current_user)):
+    project = get_project(user_id, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="not found")
+    delete_project(user_id, project_id)
+    path = graph_dir(user_id, project["owner"], project["repo_name"])
+    if path.is_dir():
+        shutil.rmtree(path)
+    return None
 
 
 # ── Debug endpoints (dev only) ────────────────────────────────────────────────

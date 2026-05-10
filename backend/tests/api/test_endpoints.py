@@ -31,7 +31,7 @@ async def test_index_bad_url_streams_error_event(client, auth_user):
     assert "Cannot parse" in error_events[0]["data"]["message"]
 
 
-async def test_index_git_clone_fail_streams_error_event(client, auth_user):
+async def test_index_git_clone_fail_streams_error_event(client, auth_user, fake_supabase):
     from tests.conftest import parse_sse_body
     from unittest.mock import MagicMock, AsyncMock
 
@@ -58,7 +58,7 @@ async def test_index_request_validation(client, auth_user):
     assert response.status_code == 422
 
 
-async def test_graph_unindexed_returns_empty(client, auth_user):
+async def test_graph_unindexed_returns_empty(client, auth_user, fake_supabase):
     response = await client.get("/graph/unknown/repo", headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     data = response.json()
@@ -67,13 +67,29 @@ async def test_graph_unindexed_returns_empty(client, auth_user):
     assert data["clusters"] == []
 
 
-async def test_graph_after_index_returns_data(client, auth_user):
-    seeded = GraphData(
+async def test_graph_after_index_returns_data(client, auth_user, fake_supabase, monkeypatch):
+    fake_graph = GraphData(
         nodes=[GraphNode(id="n1", label="file.py", type="file", cluster="auth")],
         edges=[],
         clusters=[GraphCluster(id="auth", label="Auth", size=1)],
     )
-    indexer._registry["myorg/myrepo"] = {"path": "/fake", "graph": seeded}
+
+    # Seed a project row so get_graph_data finds the repo for this user
+    fake_supabase.table("projects").insert({
+        "user_id": str(auth_user),
+        "owner": "myorg",
+        "repo_name": "myrepo",
+        "repo_url": "https://github.com/myorg/myrepo",
+        "index_status": "ready",
+    }).execute()
+
+    # Monkeypatch get_graph_data in main's namespace (avoids MCP calls)
+    import main as _main
+
+    async def _fake_get_graph_data(user_id, owner, repo):
+        return fake_graph
+
+    monkeypatch.setattr(_main, "get_graph_data", _fake_get_graph_data)
 
     response = await client.get("/graph/myorg/myrepo", headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
