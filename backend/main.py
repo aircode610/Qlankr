@@ -32,7 +32,18 @@ from models import (
     RunTestsRequest,
 )
 
-app = FastAPI()
+from contextlib import asynccontextmanager  # noqa: E402
+
+from startup import reconcile_orphaned_runs  # noqa: E402
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    reconcile_orphaned_runs()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
