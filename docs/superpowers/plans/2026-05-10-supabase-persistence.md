@@ -377,65 +377,95 @@ Verify the file is gitignored (it already is via `.env`).
 - Create: `backend/auth.py`
 - Test: `backend/tests/test_auth.py`
 
+**Note:** Modern Supabase projects sign JWTs asymmetrically with **ES256 (ECDSA P-256)**, not HS256. There is no shared `SUPABASE_JWT_SECRET` to put in env. The backend verifies tokens by fetching the project's public key from the JWKS endpoint at `{SUPABASE_URL}/auth/v1/.well-known/jwks.json`. PyJWT's `PyJWKClient` handles fetching, caching by `kid`, and key selection.
+
 - [ ] **Step 1: Write the failing tests**
 
 Create `backend/tests/test_auth.py`:
 
 ```python
-import os
 import time
 from uuid import uuid4
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ec
 
-from auth import InvalidToken, verify_jwt
+import auth
 
 
 @pytest.fixture(autouse=True)
-def jwt_secret(monkeypatch):
-    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-secret-please-ignore")
+def supabase_url(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
 
 
-def _make_token(payload):
-    return jwt.encode(payload, "test-secret-please-ignore", algorithm="HS256")
+@pytest.fixture
+def keypair():
+    priv = ec.generate_private_key(ec.SECP256R1())
+    pub = priv.public_key()
+    return priv, pub
 
 
-def test_verify_jwt_returns_user_id_for_valid_token():
+@pytest.fixture
+def stub_jwks(monkeypatch, keypair):
+    _, pub = keypair
+
+    class _StubKey:
+        @property
+        def key(self):
+            return pub
+
+    class _StubClient:
+        def get_signing_key_from_jwt(self, token):
+            return _StubKey()
+
+    auth._jwks_client.cache_clear()
+    monkeypatch.setattr(auth, "_jwks_client", lambda: _StubClient())
+
+
+def _make_token(priv_key, payload):
+    return jwt.encode(payload, priv_key, algorithm="ES256")
+
+
+def test_verify_jwt_returns_user_id_for_valid_token(stub_jwks, keypair):
+    priv, _ = keypair
     uid = uuid4()
-    token = _make_token({
+    token = _make_token(priv, {
         "sub": str(uid),
         "aud": "authenticated",
         "exp": int(time.time()) + 3600,
     })
-    assert verify_jwt(token) == uid
+    assert auth.verify_jwt(token) == uid
 
 
-def test_verify_jwt_rejects_expired_token():
-    token = _make_token({
+def test_verify_jwt_rejects_expired_token(stub_jwks, keypair):
+    priv, _ = keypair
+    token = _make_token(priv, {
         "sub": str(uuid4()),
         "aud": "authenticated",
         "exp": int(time.time()) - 1,
     })
-    with pytest.raises(InvalidToken, match="expired"):
-        verify_jwt(token)
+    with pytest.raises(auth.InvalidToken, match="expired"):
+        auth.verify_jwt(token)
 
 
-def test_verify_jwt_rejects_wrong_audience():
-    token = _make_token({
+def test_verify_jwt_rejects_wrong_audience(stub_jwks, keypair):
+    priv, _ = keypair
+    token = _make_token(priv, {
         "sub": str(uuid4()),
         "aud": "service_role",
         "exp": int(time.time()) + 3600,
     })
-    with pytest.raises(InvalidToken):
-        verify_jwt(token)
+    with pytest.raises(auth.InvalidToken):
+        auth.verify_jwt(token)
 
 
-def test_verify_jwt_rejects_bad_signature():
+def test_verify_jwt_rejects_bad_signature(stub_jwks):
+    other_priv = ec.generate_private_key(ec.SECP256R1())
     payload = {"sub": str(uuid4()), "aud": "authenticated", "exp": int(time.time()) + 3600}
-    token = jwt.encode(payload, "wrong-secret", algorithm="HS256")
-    with pytest.raises(InvalidToken):
-        verify_jwt(token)
+    token = jwt.encode(payload, other_priv, algorithm="ES256")
+    with pytest.raises(auth.InvalidToken):
+        auth.verify_jwt(token)
 ```
 
 - [ ] **Step 2: Run tests, confirm they fail**
@@ -447,7 +477,7 @@ cd backend
 pytest tests/test_auth.py -v
 ```
 
-Expected: import error or `ModuleNotFoundError: auth`.
+Expected: `ModuleNotFoundError: auth`.
 
 - [ ] **Step 3: Implement `auth.py`**
 
@@ -455,23 +485,31 @@ Create `backend/auth.py`:
 
 ```python
 import os
+from functools import lru_cache
 from uuid import UUID
 
 import jwt
 from fastapi import Header, HTTPException
+from jwt import PyJWKClient
 
 
 class InvalidToken(Exception):
     pass
 
 
+@lru_cache(maxsize=1)
+def _jwks_client() -> PyJWKClient:
+    base = os.environ["SUPABASE_URL"].rstrip("/")
+    return PyJWKClient(f"{base}/auth/v1/.well-known/jwks.json")
+
+
 def verify_jwt(token: str) -> UUID:
-    secret = os.environ["SUPABASE_JWT_SECRET"]
     try:
+        signing_key = _jwks_client().get_signing_key_from_jwt(token).key
         payload = jwt.decode(
             token,
-            secret,
-            algorithms=["HS256"],
+            signing_key,
+            algorithms=["ES256"],
             audience="authenticated",
         )
     except jwt.ExpiredSignatureError as e:
@@ -508,7 +546,7 @@ Expected: 4 passed.
 
 ```bash
 git add backend/auth.py backend/tests/test_auth.py
-git commit -m "feat(auth): JWT verification + get_current_user dependency"
+git commit -m "feat(auth): JWT verification via JWKS (ES256) + get_current_user dependency"
 ```
 
 ---
