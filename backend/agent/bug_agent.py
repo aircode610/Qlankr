@@ -15,6 +15,7 @@ import asyncio
 import os
 import re
 import traceback
+from contextlib import AsyncExitStack
 from typing import Any, AsyncIterator
 from uuid import uuid4
 
@@ -403,46 +404,43 @@ async def _start_bug_graph(
     thread_id = session_id or str(uuid4())
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
 
-    # Fetch MCP tools once for the entire pipeline run (prefetch + all stages)
-    from agent.tools import get_mcp_client
-    print("[bug_agent] fetching MCP tools for pipeline run...", flush=True)
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
-    _run_tools[thread_id] = all_tools
-    print(f"[bug_agent] got {len(all_tools)} MCP tools", flush=True)
-
+    from agent.tools import get_mcp_client, open_persistent_mcp_sessions
     from agent.prefetch import prefetch_context
 
-    pref = await prefetch_context(pr_url, repo_name, all_tools=all_tools)
-    initial_state: BugReproductionState = {
-        "description": description,
-        "environment": environment,
-        "severity_input": severity_input,
-        "repo_name": repo_name,
-        "jira_ticket": jira_ticket,
-        "attachments": attachments,
-        "session_id": thread_id,
-        "repo_stats": pref.get("stats", {}),
-        "processes": pref.get("processes", []),
-        "triage": {},
-        "mechanics": {},
-        "reproduction_plan": {},
-        "research_findings": {},
-        "bug_report": {},
-        "current_stage": "triage",
-        "tool_calls_used": 0,
-        "messages": [],
-        "available_tools": [],
-        "mechanics_feedback": None,
-        "research_context": None,
-    }
+    async with AsyncExitStack() as stack:
+        all_tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+        _run_tools[thread_id] = all_tools
 
-    _bug_sessions[thread_id] = {"description": description, "repo_name": repo_name, "emitted_stages": set()}
-    try:
-        async for event in _stream_bug_graph(_get_bug_graph(), initial_state, config, thread_id):
-            yield event
-    finally:
-        _run_tools.pop(thread_id, None)
+        pref = await prefetch_context(pr_url, repo_name, all_tools=all_tools)
+        initial_state: BugReproductionState = {
+            "description": description,
+            "environment": environment,
+            "severity_input": severity_input,
+            "repo_name": repo_name,
+            "jira_ticket": jira_ticket,
+            "attachments": attachments,
+            "session_id": thread_id,
+            "repo_stats": pref.get("stats", {}),
+            "processes": pref.get("processes", []),
+            "triage": {},
+            "mechanics": {},
+            "reproduction_plan": {},
+            "research_findings": {},
+            "bug_report": {},
+            "current_stage": "triage",
+            "tool_calls_used": 0,
+            "messages": [],
+            "available_tools": [],
+            "mechanics_feedback": None,
+            "research_context": None,
+        }
+
+        _bug_sessions[thread_id] = {"description": description, "repo_name": repo_name, "emitted_stages": set()}
+        try:
+            async for event in _stream_bug_graph(_get_bug_graph(), initial_state, config, thread_id):
+                yield event
+        finally:
+            _run_tools.pop(thread_id, None)
 
 
 async def _resume_bug_graph(
@@ -455,18 +453,18 @@ async def _resume_bug_graph(
 
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
 
-    # Re-fetch MCP tools for the resume segment
-    from agent.tools import get_mcp_client
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
-    _run_tools[session_id] = all_tools
-    try:
-        async for event in _stream_bug_graph(
-            _get_bug_graph(), Command(resume=user_response), config, session_id
-        ):
-            yield event
-    finally:
-        _run_tools.pop(session_id, None)
+    from agent.tools import get_mcp_client, open_persistent_mcp_sessions
+
+    async with AsyncExitStack() as stack:
+        all_tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+        _run_tools[session_id] = all_tools
+        try:
+            async for event in _stream_bug_graph(
+                _get_bug_graph(), Command(resume=user_response), config, session_id
+            ):
+                yield event
+        finally:
+            _run_tools.pop(session_id, None)
 
 
 async def _stream_bug_graph(

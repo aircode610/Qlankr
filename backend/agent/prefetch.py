@@ -6,7 +6,7 @@ do not waste tool-call budget on basic context that can be loaded upfront.
 """
 
 from agent.tools import get_mcp_client
-from indexer import _to_records, _unwrap_text  # noqa: PLC0415
+from indexer import _to_records  # noqa: PLC0415
 
 
 _EMPTY_RESULT: dict = {"processes": [], "stats": {}, "changed_symbols": []}
@@ -45,7 +45,6 @@ async def _fetch(repo_name: str, all_tools: list | None = None) -> dict:
 
     if all_tools is not None:
         tools = all_tools
-        client = get_mcp_client()  # needed for read_resource below
     else:
         client = get_mcp_client()
         tools = await client.get_tools()
@@ -73,25 +72,15 @@ async def _fetch(repo_name: str, all_tools: list | None = None) -> dict:
         except Exception as e:
             print(f"[prefetch] list_repos error: {e}", flush=True)
 
-    # ── Process list via resource URI, falling back to Cypher ─────────────────
-    result["processes"] = await _fetch_processes(client, tool_map, repo_name)
+    # ── Process list via Cypher ───────────────────────────────────────────────
+    result["processes"] = await _fetch_processes(tool_map, repo_name)
     print(f"[prefetch] processes fetched: {len(result['processes'])}", flush=True)
 
     return result
 
 
-async def _fetch_processes(client, tool_map: dict, repo_name: str) -> list[dict]:
-    """Try resource URI first; fall back to Cypher query."""
-    # Option A: MCP resource read
-    try:
-        raw = await client.read_resource(f"gitnexus://repo/{repo_name}/processes")
-        records = _to_records(_unwrap_text(raw))
-        if records:
-            return records
-    except Exception:
-        pass
-
-    # Option B: Cypher fallback
+async def _fetch_processes(tool_map: dict, repo_name: str) -> list[dict]:
+    """Fetch process list via Cypher query."""
     if "cypher" not in tool_map:
         return []
     try:
@@ -106,5 +95,5 @@ async def _fetch_processes(client, tool_map: dict, repo_name: str) -> list[dict]
         })
         return _to_records(raw)
     except Exception as e:
-        print(f"[prefetch] cypher process fallback error: {e}", flush=True)
+        print(f"[prefetch] cypher process error: {e}", flush=True)
         return []

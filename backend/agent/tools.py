@@ -1,10 +1,12 @@
 import json
 import os
 import shutil
+from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools as _load_mcp_tools
 
 
 # ── Stage tool subsets ────────────────────────────────────────────────────────
@@ -276,17 +278,79 @@ def get_mcp_client() -> MultiServerMCPClient:
     """
     Returns a MultiServerMCPClient configured with all enabled MCP servers.
 
-    The client is stateless — each ``get_tools()`` or tool ``.ainvoke()`` call
-    spawns ephemeral server processes.  To avoid redundant spawning, call
-    ``get_tools()`` once per pipeline run and pass the list to stages.
+    Prefer ``open_persistent_mcp_sessions()`` for pipeline runs — it keeps
+    each server process alive for the full duration so every tool call reuses
+    the same connection instead of spawning a new server process.
 
-    Usage::
-
-        client = get_mcp_client()
-        tools = await client.get_tools()   # spawns servers, discovers tools, cleans up
-        # pass ``tools`` to stages — do NOT call get_tools() again per stage
+    Use ``get_tools()`` only for one-off debug endpoints that don't need
+    persistent sessions.
     """
     return MultiServerMCPClient(_server_config())
+
+
+async def open_persistent_mcp_sessions(
+    client: MultiServerMCPClient,
+    stack: AsyncExitStack,
+) -> list:
+    """Open a persistent stdio session for every configured MCP server.
+
+    Unlike ``client.get_tools()`` (which spawns a fresh server process on every
+    tool ``.ainvoke()`` call), tools returned here are **bound to their open
+    sessions**.  All subsequent tool calls reuse the already-running process —
+    zero additional spawns.
+
+    The caller is responsible for keeping *stack* alive for as long as the
+    tools are in use.  Closing the stack terminates the server processes.
+
+    Args:
+        client: A ``MultiServerMCPClient`` instance built by ``get_mcp_client()``.
+        stack:  An ``AsyncExitStack`` owned by the caller (pipeline run scope).
+
+    Returns:
+        Combined list of ``BaseTool`` objects from all servers, each bound to
+        its persistent session.
+
+    Example::
+
+        async with AsyncExitStack() as stack:
+            tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+            # tools can be called freely — servers stay alive until here
+    """
+    all_tools: list = []
+    for server_name in client.connections:
+        try:
+            session = await stack.enter_async_context(client.session(server_name))
+            server_tools = await _load_mcp_tools(session, server_name=server_name)
+            all_tools.extend(server_tools)
+            print(f"[mcp] opened persistent session for {server_name!r} ({len(server_tools)} tools)", flush=True)
+        except Exception as exc:
+            print(f"[mcp] failed to open session for {server_name!r}: {exc}", flush=True)
+    return all_tools
+
+
+def get_gitnexus_client() -> MultiServerMCPClient | None:
+    """Return a client configured *only* for the GitNexus server, or None if unavailable.
+
+    Use this in the indexer / graph endpoints so querying GitNexus does NOT
+    spawn GitHub, Jira, Confluence, Notion etc. alongside it.
+    """
+    if not shutil.which("gitnexus"):
+        return None
+    utf8_env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+    }
+    return MultiServerMCPClient({
+        "gitnexus": {
+            "transport": "stdio",
+            "command": "gitnexus",
+            "args": ["mcp"],
+            "env": utf8_env,
+        }
+    })
 
 
 def get_available_integrations() -> list[str]:
