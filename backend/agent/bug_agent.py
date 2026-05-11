@@ -545,6 +545,10 @@ async def _stream_bug_graph(
             session_id=thread_id,
             report=br_parsed,
             agent_steps=agent_steps,
+            full_state={
+                k: state.values.get(k, {})
+                for k in ("triage", "mechanics", "reproduction_plan", "research_findings", "bug_report", "tool_calls_used")
+            },
         )
 
 

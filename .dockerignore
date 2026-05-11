@@ -1,0 +1,5 @@
+# docker-compose frontend build uses context: . (repo root). Patterns are relative to that root.
+# Exclude host node_modules so `file:../shared` symlinks (qlankr-shared) do not break the daemon.
+frontend/node_modules
+frontend/dist
+.git

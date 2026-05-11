@@ -96,10 +96,14 @@ BUG_RESEARCH_TOOLS: set[str] = {
     "sniffer_find_errors",
 }
 
-BUG_REPORT_TOOLS: set[str] = {
-    "jira_create_issue",
-    "jira_update_issue",
-}
+def _bug_report_tools() -> set[str]:
+    tools: set[str] = set()
+    if os.environ.get("JIRA_URL") and os.environ.get("JIRA_API_TOKEN"):
+        tools |= {"jira_create_issue", "jira_update_issue"}
+    return tools
+
+
+BUG_REPORT_TOOLS: set[str] = _bug_report_tools()
 
 _STAGE_TOOLS: dict[str, set[str]] = {
     "gather": GATHER_TOOLS,
