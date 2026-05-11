@@ -185,6 +185,7 @@ def _server_config() -> dict:
         },
     }
     # Jira — mcp-atlassian Python package (pip install mcp-atlassian)
+    # mcp-atlassian v0.21+ expects JIRA_USERNAME (not JIRA_EMAIL) for basic auth
     if os.environ.get("JIRA_URL") and os.environ.get("JIRA_API_TOKEN"):
         config["jira"] = {
             "transport": "stdio",
@@ -193,7 +194,7 @@ def _server_config() -> dict:
             "env": {
                 **utf8_env,
                 "JIRA_URL": os.environ["JIRA_URL"],
-                "JIRA_EMAIL": os.environ.get("JIRA_EMAIL", ""),
+                "JIRA_USERNAME": os.environ.get("JIRA_EMAIL", ""),
                 "JIRA_API_TOKEN": os.environ["JIRA_API_TOKEN"],
             },
         }
@@ -222,6 +223,7 @@ def _server_config() -> dict:
             },
         }
     # Confluence — mcp-atlassian Python package (same package as Jira, separate entry)
+    # mcp-atlassian v0.21+ expects CONFLUENCE_USERNAME + CONFLUENCE_API_TOKEN for basic auth
     if os.environ.get("CONFLUENCE_URL") and os.environ.get("CONFLUENCE_TOKEN"):
         config["confluence"] = {
             "transport": "stdio",
@@ -230,7 +232,8 @@ def _server_config() -> dict:
             "env": {
                 **utf8_env,
                 "CONFLUENCE_URL": os.environ["CONFLUENCE_URL"],
-                "CONFLUENCE_TOKEN": os.environ["CONFLUENCE_TOKEN"],
+                "CONFLUENCE_USERNAME": os.environ.get("JIRA_EMAIL", ""),
+                "CONFLUENCE_API_TOKEN": os.environ["CONFLUENCE_TOKEN"],
                 "CONFLUENCE_SPACE_KEY": os.environ.get("CONFLUENCE_SPACE_KEY", ""),
             },
         }
