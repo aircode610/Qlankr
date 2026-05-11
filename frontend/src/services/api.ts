@@ -136,13 +136,20 @@ export interface NormalisedGraph {
  */
 function normaliseBackendGraph(raw: BackendGraphData): NormalisedGraph {
   const nodes: GraphNode[] = raw.nodes.map((n) => {
-    const label: NodeLabel = n.type === 'cluster' ? 'Community' : 'File';
+    // Backend now sends gitnexus labels directly ("File", "Function", "Class",
+    // "Method", ...) plus "cluster" for community group nodes. Cluster nodes
+    // map to NodeLabel "Community"; everything else passes through as-is and
+    // falls back to "File" if the label isn't a known NodeLabel.
+    const label: NodeLabel = n.type === 'cluster' ? 'Community' : (n.type as NodeLabel || 'File');
+    // For symbol nodes, filePath isn't meaningful (the id is gitnexus's own
+    // identifier, not a path). Only File nodes use the id as filePath.
+    const filePath = label === 'File' ? n.id : '';
     return {
       id: n.id,
       label,
       properties: {
         name: n.label,
-        filePath: n.id,
+        filePath,
         communities: n.cluster ? [n.cluster] : [],
       },
     };

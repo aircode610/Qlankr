@@ -160,14 +160,17 @@ class IndexDoneEvent(BaseModel):
 class GraphNode(BaseModel):
     id: str
     label: str
-    type: Literal["file", "cluster"]
+    # Node kind. "cluster" reserved for community group nodes. Other values
+    # are gitnexus labels like "File", "Function", "Class", "Method", etc.
+    type: str
     cluster: str
 
 
 class GraphEdge(BaseModel):
     source: str
     target: str
-    type: Literal["CALLS", "IMPORTS"]
+    # gitnexus relation type: IMPORTS, CALLS, DEFINES, CONTAINS, EXTENDS, IMPLEMENTS, ...
+    type: str
 
 
 class GraphCluster(BaseModel):

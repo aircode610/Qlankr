@@ -316,6 +316,8 @@ async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
             if "cypher" in tool_map:
                 cypher = tool_map["cypher"]
                 nodes, clusters = await _cypher_nodes(cypher, repo_name)
+                file_cluster_map = {n.id: n.cluster for n in nodes if n.type == "File"}
+                nodes.extend(await _cypher_symbol_nodes(cypher, repo_name, file_cluster_map))
                 edges = await _cypher_edges(cypher, repo_name)
                 print(
                     f"[indexer] graph: {len(nodes)} nodes, {len(edges)} edges, {len(clusters)} clusters",
@@ -414,7 +416,7 @@ async def _cypher_nodes(
                 if cluster_id not in cluster_labels:
                     cluster_labels[cluster_id] = dir_name.capitalize()
 
-            nodes.append(GraphNode(id=join_key, label=label, type="file", cluster=cluster_id))
+            nodes.append(GraphNode(id=join_key, label=label, type="File", cluster=cluster_id))
 
         clustered   = sum(1 for n in nodes if not n.cluster.startswith("dir__") and n.cluster != "unclustered")
         dir_grouped = sum(1 for n in nodes if n.cluster.startswith("dir__"))
@@ -435,21 +437,102 @@ async def _cypher_nodes(
     return nodes, clusters
 
 
-async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
-    """Fetch IMPORTS edges between File nodes.
-    Note: CALLS exists only at symbol level, not file level ? IMPORTS is the only
-    file-to-file edge type in the GitNexus schema.
-    Uses filePath as source/target to match node IDs from _cypher_nodes.
+async def _cypher_symbol_nodes(
+    cypher_tool, repo_name: str, file_cluster_map: dict[str, str],
+) -> list[GraphNode]:
+    """Fetch Function/Class/Method nodes joined to their parent File via DEFINES.
+
+    Symbols inherit the cluster of their parent File so they cluster together
+    visually with the rest of that file's community.
     """
-    edges: list[GraphEdge] = []
-    for rel_type in ("IMPORTS",):
+    out: list[GraphNode] = []
+    for kind in ("Function", "Class", "Method"):
         try:
             raw = await cypher_tool.ainvoke({
                 "query": (
-                    f"MATCH (a:File)-[r:CodeRelation]->(b:File) "
+                    f"MATCH (f:File)-[r:CodeRelation]->(s:{kind}) "
+                    f"WHERE r.type = 'DEFINES' "
+                    f"RETURN s.id AS id, s.name AS name, f.filePath AS filePath "
+                    f"LIMIT 5000"
+                ),
+                "repo": repo_name,
+            })
+            before = len(out)
+            for rec in _to_records(raw):
+                sid  = str(rec.get("id") or "").strip()
+                name = str(rec.get("name") or "").strip()
+                fp   = str(rec.get("filePath") or "").strip()
+                if not sid or not name:
+                    continue
+                cluster = file_cluster_map.get(fp, "uncategorized")
+                out.append(GraphNode(id=sid, label=name, type=kind, cluster=cluster))
+            print(f"[indexer] {kind} nodes: {len(out) - before}", flush=True)
+        except Exception as e:
+            print(f"[indexer] cypher {kind} nodes error: {e}", flush=True)
+    return out
+
+
+async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
+    """Fetch edges between Files and symbols. File-to-file uses filePath as ID;
+    symbol-to-symbol and File-to-symbol use the gitnexus id property to match
+    the IDs produced by _cypher_nodes / _cypher_symbol_nodes.
+    """
+    edges: list[GraphEdge] = []
+
+    # File-to-file IMPORTS (filePath-keyed)
+    try:
+        raw = await cypher_tool.ainvoke({
+            "query": (
+                "MATCH (a:File)-[r:CodeRelation]->(b:File) "
+                "WHERE r.type = 'IMPORTS' "
+                "RETURN a.filePath AS source, b.filePath AS target "
+                "LIMIT 3000"
+            ),
+            "repo": repo_name,
+        })
+        before = len(edges)
+        for rec in _to_records(raw):
+            src = str(rec.get("source", "")).strip()
+            tgt = str(rec.get("target", "")).strip()
+            if src and tgt:
+                edges.append(GraphEdge(source=src, target=tgt, type="IMPORTS"))
+        print(f"[indexer] IMPORTS edges: {len(edges) - before}", flush=True)
+    except Exception as e:
+        print(f"[indexer] cypher IMPORTS edges error: {e}", flush=True)
+
+    # File→symbol DEFINES (source uses filePath to match File node IDs;
+    # target uses id to match symbol node IDs).
+    try:
+        raw = await cypher_tool.ainvoke({
+            "query": (
+                "MATCH (a:File)-[r:CodeRelation]->(b) "
+                "WHERE r.type = 'DEFINES' "
+                "RETURN a.filePath AS source, b.id AS target "
+                "LIMIT 5000"
+            ),
+            "repo": repo_name,
+        })
+        before = len(edges)
+        for rec in _to_records(raw):
+            src = str(rec.get("source", "")).strip()
+            tgt = str(rec.get("target", "")).strip()
+            if src and tgt:
+                edges.append(GraphEdge(source=src, target=tgt, type="DEFINES"))
+        print(f"[indexer] DEFINES edges: {len(edges) - before}", flush=True)
+    except Exception as e:
+        print(f"[indexer] cypher DEFINES edges error: {e}", flush=True)
+
+    # Symbol-level edges (CALLS, EXTENDS, IMPLEMENTS, CONTAINS) keyed by id.
+    # Edges whose endpoints aren't in the node set are silently dropped by
+    # the frontend (graph-adapter.ts:199), so we can fetch loosely here.
+    for rel_type in ("CALLS", "EXTENDS", "IMPLEMENTS", "CONTAINS"):
+        try:
+            raw = await cypher_tool.ainvoke({
+                "query": (
+                    f"MATCH (a)-[r:CodeRelation]->(b) "
                     f"WHERE r.type = '{rel_type}' "
-                    f"RETURN a.filePath AS source, b.filePath AS target "
-                    f"LIMIT 3000"
+                    f"RETURN a.id AS source, b.id AS target "
+                    f"LIMIT 4000"
                 ),
                 "repo": repo_name,
             })
@@ -462,6 +545,7 @@ async def _cypher_edges(cypher_tool, repo_name: str) -> list[GraphEdge]:
             print(f"[indexer] {rel_type} edges: {len(edges) - before}", flush=True)
         except Exception as e:
             print(f"[indexer] cypher {rel_type} edges error: {e}", flush=True)
+
     return edges
 
 
