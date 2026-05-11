@@ -1,31 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { getBugReport } from "../services/api";
+import { BugReportView } from "../components/BugReportView";
+import { getBugReport, type BugReportRow } from "../services/api";
+import type { BugReport } from "../services/types";
 
-type Detail = {
-  id: string;
-  bug_description: string;
-  severity: string | null;
-  status: string;
-  triage_output: unknown;
-  mechanics_output: unknown;
-  reproduction_output: unknown;
-  research_output: unknown;
-  report_output: unknown;
-  final_report: unknown;
-  created_at: string;
-  completed_at: string | null;
-};
+type Detail = BugReportRow & Record<string, unknown>;
 
-function Section({ title, value }: { title: string; value: unknown }) {
-  if (value == null) return null;
-  return (
-    <section className="rounded border p-3">
-      <h3 className="mb-2 font-medium">{title}</h3>
-      <pre className="overflow-x-auto whitespace-pre-wrap text-xs">{JSON.stringify(value, null, 2)}</pre>
-    </section>
-  );
+function extractReport(final_report: unknown): BugReport | null {
+  if (!final_report || typeof final_report !== "object") return null;
+  const wrapper = final_report as { report?: unknown };
+  const report = wrapper.report ?? final_report;
+  if (!report || typeof report !== "object") return null;
+  const r = report as Partial<BugReport>;
+  if (typeof r.title !== "string" || !Array.isArray(r.reproduction_steps)) return null;
+  return report as BugReport;
 }
 
 export function BugReportReplay() {
@@ -34,22 +23,27 @@ export function BugReportReplay() {
 
   useEffect(() => {
     if (!runId) return;
-    getBugReport(runId).then((d) => setDetail(d as Detail)).catch(console.error);
+    getBugReport(runId).then(setDetail).catch(console.error);
   }, [runId]);
 
   if (!detail) return <div className="p-4 text-sm text-gray-500">Loading…</div>;
 
+  const report = extractReport(detail.final_report);
+
   return (
-    <div className="space-y-3">
-      <Link to={`/projects/${projectId}/history`} className="text-sm underline">← History</Link>
-      <h2 className="text-lg font-semibold">Bug: {detail.bug_description.slice(0, 100)}</h2>
-      <p className="text-xs text-gray-500">{detail.status} · {detail.severity ?? "no severity"} · {detail.created_at}</p>
-      <Section title="Triage" value={detail.triage_output} />
-      <Section title="Mechanics" value={detail.mechanics_output} />
-      <Section title="Reproduction" value={detail.reproduction_output} />
-      <Section title="Research" value={detail.research_output} />
-      <Section title="Report" value={detail.report_output} />
-      <Section title="Final report" value={detail.final_report} />
+    <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b border-border-subtle px-4 py-2">
+        <Link to={`/projects/${projectId}/history`} className="text-sm underline">← History</Link>
+      </div>
+      {report ? (
+        <div className="min-h-0 flex-1">
+          <BugReportView report={report} sessionId={detail.id} />
+        </div>
+      ) : (
+        <div className="p-4 text-sm text-gray-500">
+          No final report available for this run.
+        </div>
+      )}
     </div>
   );
 }
