@@ -1,21 +1,25 @@
 """
-Main evaluation runner for the Qlankr Sprint 2 agent.
+Main evaluation runner for the Qlankr agent (PR analysis + bug reproduction).
 
 Usage:
     cd backend && python -m evals.run_evals [--suite SUITE] [--dataset DATASET]
 
 Suites:
-    integration — full pipeline, integration path
-    e2e         — full pipeline, e2e path
-    all         — both suites (default)
+    integration — PR impact analysis, integration test path
+    e2e         — PR impact analysis, E2E test path
+    bug         — bug reproduction pipeline (deterministic + LLM judges)
+    all         — all three suites (default)
 
-Datasets:
+Datasets (PR analysis):
     indexed     — qlankr-eval-indexed (Qlankr repo, full pipeline with GitNexus)
     github      — qlankr-eval-github  (external repos, GitHub-only)
-    all         — both datasets (default)
+
+Dataset (bug):
+    qlankr-eval-bugs  (fixed, seeded by evals/create_dataset.py)
 
 Examples:
-    python -m evals.run_evals                        # run everything
+    python -m evals.run_evals                              # run everything
+    python -m evals.run_evals --suite bug                  # bug repro only
     python -m evals.run_evals --suite integration --dataset indexed
     python -m evals.run_evals --suite e2e --dataset github
 """
@@ -60,6 +64,7 @@ from evals.target import (
     agent_target_integration,
     agent_target_e2e,
 )
+from evals.run_bug_evals import run_eval as _run_bug_eval
 
 # ── Evaluator sets per suite ──────────────────────────────────────────────────
 
@@ -189,7 +194,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Qlankr agent evals")
     parser.add_argument(
         "--suite",
-        choices=["integration", "e2e", "all"],
+        choices=["integration", "e2e", "bug", "all"],
         default="all",
         help="Which eval suite to run (default: all)",
     )
@@ -197,33 +202,58 @@ def main() -> None:
         "--dataset",
         choices=["indexed", "github", "all"],
         default="all",
-        help="Which dataset to evaluate on (default: all)",
+        help="PR-analysis dataset (default: all). Ignored when --suite bug.",
     )
     parser.add_argument(
         "--concurrency",
         type=int,
         default=2,
-        help="Max parallel eval runs (default: 2)",
+        help="Max parallel eval runs (default: 2). Bug suite defaults to 1.",
+    )
+    parser.add_argument(
+        "--no-judges",
+        action="store_true",
+        help="Skip LLM-as-judge evaluators in the bug suite (faster, no API cost).",
     )
     args = parser.parse_args()
 
-    suites = list(SUITES.keys()) if args.suite == "all" else [args.suite]
-    datasets = list(DATASETS.keys()) if args.dataset == "all" else [args.dataset]
-
-    # Verify datasets exist in LangSmith
     client = Client()
     existing = {ds.name for ds in client.list_datasets()}
-    missing = [DATASETS[d] for d in datasets if DATASETS[d] not in existing]
-    if missing:
-        print(f"ERROR: These datasets don't exist in LangSmith: {missing}")
-        print("Run first:  cd backend && python -m evals.create_dataset")
-        sys.exit(1)
 
-    print(f"Running suites: {suites}")
-    print(f"On datasets:    {datasets}")
-    print(f"Concurrency:    {args.concurrency}")
+    run_pr_suites = args.suite in ("integration", "e2e", "all")
+    run_bug_suite = args.suite in ("bug", "all")
 
-    asyncio.run(run_all(suites, datasets, args.concurrency))
+    # ── PR analysis suites ────────────────────────────────────────────────────
+    if run_pr_suites:
+        pr_suite_names = [s for s in SUITES if args.suite == "all" or s == args.suite]
+        datasets = list(DATASETS.keys()) if args.dataset == "all" else [args.dataset]
+
+        missing = [DATASETS[d] for d in datasets if DATASETS[d] not in existing]
+        if missing:
+            print(f"ERROR: These datasets don't exist in LangSmith: {missing}")
+            print("Run first:  cd backend && python -m evals.create_dataset")
+            sys.exit(1)
+
+        print(f"Running PR suites: {pr_suite_names}")
+        print(f"On datasets:       {datasets}")
+        asyncio.run(run_all(pr_suite_names, datasets, args.concurrency))
+
+    # ── Bug reproduction suite ────────────────────────────────────────────────
+    if run_bug_suite:
+        bug_dataset = "qlankr-eval-bugs"
+        if bug_dataset not in existing:
+            print(f"ERROR: Dataset '{bug_dataset}' not found in LangSmith.")
+            print("Run first:  cd backend && python -m evals.create_dataset")
+            sys.exit(1)
+
+        # Bug pipeline is expensive — use concurrency=1 unless user explicitly raised it
+        bug_concurrency = 1 if args.concurrency == 2 else args.concurrency
+        asyncio.run(_run_bug_eval(
+            dataset_name=bug_dataset,
+            judges_enabled=not args.no_judges,
+            max_concurrency=bug_concurrency,
+        ))
+
     print("\nDone. View results at https://smith.langchain.com")
 
 
