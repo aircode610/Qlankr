@@ -110,6 +110,8 @@ class AgentStepEvent(BaseModel):
     type: Literal["agent_step"] = "agent_step"
     tool: str
     summary: str
+    input: dict = {}
+    output: dict = {}
 
 
 class StageChangeEvent(BaseModel):

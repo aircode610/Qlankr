@@ -15,12 +15,16 @@ import { AuthedNav } from "./components/AuthedNav";
 import { SettingsPanel } from "./components/SettingsPanel";
 import LegacyApp from "./pages/LegacyApp";
 
-function AuthedShell() {
+// Outer shell: AuthedNav + scrollable content area.
+// Used for /projects (list) and /settings only.
+function OuterShell() {
   return (
-    <>
+    <div className="flex min-h-screen flex-col bg-void">
       <AuthedNav />
-      <Outlet />
-    </>
+      <div className="flex-1">
+        <Outlet />
+      </div>
+    </div>
   );
 }
 
@@ -30,21 +34,26 @@ export default function App() {
       <BrowserRouter>
         <AppStateProvider>
           <Routes>
+            {/* Public auth pages */}
             <Route path="/login" element={<LoginPage />} />
             <Route path="/signup" element={<SignupPage />} />
             <Route path="/auth/callback" element={<AuthCallbackPage />} />
 
-            <Route element={<RequireAuth><AuthedShell /></RequireAuth>}>
-              <Route path="/projects" element={<ProjectsListPage />} />
+            {/* Protected routes */}
+            <Route element={<RequireAuth><Outlet /></RequireAuth>}>
+              {/* Pages that use AuthedNav (projects list, settings) */}
+              <Route element={<OuterShell />}>
+                <Route path="/projects" element={<ProjectsListPage />} />
+                <Route path="/settings" element={<SettingsPanel />} />
+              </Route>
+
+              {/* Workspace — has its own full-screen layout with Navbar */}
               <Route path="/projects/:id" element={<ProjectDetailLayout />}>
-                {/* The full legacy UI (graph + file tree + analyze + bug reproduction) renders here,
-                    scoped to whichever project is open. Sprint 4's new tabs (History) live alongside. */}
                 <Route index element={<LegacyApp />} />
                 <Route path="history" element={<HistoryList />} />
                 <Route path="history/pr/:runId" element={<PrAnalysisReplay />} />
                 <Route path="history/bug/:runId" element={<BugReportReplay />} />
               </Route>
-              <Route path="/settings" element={<SettingsPanel />} />
             </Route>
 
             <Route path="/" element={<Navigate to="/projects" replace />} />

@@ -1,4 +1,5 @@
-import { Zap, Layers, GitPullRequest, Loader2, Settings2, Bug } from '@/lib/lucide-icons';
+import { Zap, Layers, GitPullRequest, Loader2, Settings2, Bug, Sun, Moon } from '@/lib/lucide-icons';
+import { useTheme } from '../hooks/useTheme';
 
 export type AppView = 'graph' | 'analyze' | 'bug' | 'settings';
 
@@ -11,11 +12,13 @@ interface NavbarProps {
   bugAnalyzing?: boolean;
 }
 
-export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflowLabel, bugAnalyzing }: NavbarProps) => (
+export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflowLabel, bugAnalyzing }: NavbarProps) => {
+  const { theme, toggleTheme } = useTheme();
+  return (
   <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface px-4">
     {/* Brand */}
     <div className="flex items-center gap-2">
-      <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-violet-800 shadow-[0_0_8px_rgba(124,58,237,0.4)]">
+      <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent-dim shadow-glow">
         <Zap className="h-3.5 w-3.5 text-white" />
       </div>
       <span className="text-sm font-semibold tracking-tight text-text-primary">Qlankr</span>
@@ -42,6 +45,15 @@ export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflow
 
     {/* Push tabs to the right */}
     <div className="flex-1" />
+
+    {/* Theme toggle */}
+    <button
+      onClick={toggleTheme}
+      className="flex h-8 w-8 items-center justify-center rounded-md border border-border-subtle bg-elevated text-text-secondary transition-colors hover:bg-hover hover:text-text-primary"
+      title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+    >
+      {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
+    </button>
 
     {/* Tab switcher */}
     <div className="flex items-center gap-0.5 rounded-lg border border-border-subtle bg-elevated p-1">
@@ -97,4 +109,5 @@ export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflow
       </button>
     </div>
   </header>
-);
+  );
+};

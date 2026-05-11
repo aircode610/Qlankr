@@ -34,6 +34,7 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
       - integration_tests / e2e_test_plans: from final result
     """
     tool_calls: list[str] = []
+    tool_transcripts: list[dict] = []
     stages_seen: list[str] = []
     checkpoints_hit: list[str] = []
     result: dict | None = None
@@ -48,6 +49,11 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
 
         if etype == "agent_step":
             tool_calls.append(data["tool"])
+            tool_transcripts.append({
+                "tool": data["tool"],
+                "input": data.get("input", {}),
+                "output": data.get("output", {}),
+            })
         elif etype == "stage_change":
             stages_seen.append(data["stage"])
         elif etype == "checkpoint":
@@ -93,6 +99,11 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
 
             if etype == "agent_step":
                 tool_calls.append(data["tool"])
+                tool_transcripts.append({
+                    "tool": data["tool"],
+                    "input": data.get("input", {}),
+                    "output": data.get("output", {}),
+                })
             elif etype == "stage_change":
                 stages_seen.append(data["stage"])
             elif etype == "checkpoint":
@@ -111,6 +122,8 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
     # Assemble output
     output: dict[str, Any] = {
         "tool_calls": tool_calls,
+        "tool_transcripts": tool_transcripts,
+        "has_blast_tools": True,
         "stages_seen": stages_seen,
         "checkpoints_hit": checkpoints_hit,
         "unit_intermediate": unit_intermediate,

@@ -472,6 +472,8 @@ async def _stream_graph(
     After the stream ends, checks state for interrupt or completion.
     """
     emitted_stages: set[str] = set()
+    # Buffer tool inputs keyed by run_id so we can emit combined input+output on completion
+    _tool_input_buffer: dict[str, dict] = {}
 
     async for event in graph.astream_events(input_or_command, version="v2", config=config):
         event_type = event["event"]
@@ -486,9 +488,32 @@ async def _stream_graph(
                 )
 
         elif event_type == "on_tool_start":
+            run_id = event.get("run_id", "")
             tool_name = event["name"]
             tool_input = event["data"].get("input", {})
-            yield AgentStepEvent(tool=tool_name, summary=_tool_summary(tool_name, tool_input))
+            _tool_input_buffer[run_id] = {
+                "tool": tool_name,
+                "input": tool_input if isinstance(tool_input, dict) else {},
+                "summary": _tool_summary(tool_name, tool_input),
+            }
+
+        elif event_type == "on_tool_end":
+            run_id = event.get("run_id", "")
+            buffered = _tool_input_buffer.pop(run_id, None)
+            if buffered:
+                raw_output = event["data"].get("output", {})
+                if hasattr(raw_output, "content"):
+                    tool_output: dict = {"content": raw_output.content}
+                elif isinstance(raw_output, dict):
+                    tool_output = raw_output
+                else:
+                    tool_output = {"content": str(raw_output)}
+                yield AgentStepEvent(
+                    tool=buffered["tool"],
+                    summary=buffered["summary"],
+                    input=buffered["input"],
+                    output=tool_output,
+                )
 
     # Stream ended — check whether graph paused at interrupt or finished
     state = await graph.aget_state(config)
