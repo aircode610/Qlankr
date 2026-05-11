@@ -763,6 +763,7 @@ const AppContent = () => {
                     result={result}
                     onHighlightFiles={handleHighlightFiles}
                     onFileNavigate={handleFileNavigate}
+                    activeWorkflow={analysisState.activeWorkflow ?? undefined}
                   />
                 )}
 
@@ -837,7 +838,12 @@ const AppContent = () => {
       {/* Choice popup — integration vs e2e */}
       {checkpoint && checkpoint.interrupt_type === 'choice' && (
         <ChoiceDialog
-          onChoice={(choice) => handleCheckpointContinue('approve', choice)}
+          onChoice={(choice) => {
+            const wf: import('./services/types').WorkflowId =
+              choice === 'integration' ? 'integration_tests' : 'e2e_planning';
+            setAnalysisState((prev) => ({ ...prev, activeWorkflow: wf }));
+            handleCheckpointContinue('approve', choice);
+          }}
         />
       )}
 

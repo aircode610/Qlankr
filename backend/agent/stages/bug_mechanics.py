@@ -24,18 +24,16 @@ if TYPE_CHECKING:
 BUDGET = 15
 
 
-async def mechanics_node(state: "BugReproductionState", llm: Any = None, client: Any = None) -> dict:
+async def mechanics_node(state: "BugReproductionState", llm: Any = None, all_tools: list | None = None) -> dict:
     if llm is None:
         from agent.agent import _llm
         llm = _llm
 
-    _own_client = client is None
-    if _own_client:
-        print("[bug_mechanics] starting MCP client...", flush=True)
+    if all_tools is None:
+        print("[bug_mechanics] starting MCP client (no pre-fetched tools)...", flush=True)
         client = get_mcp_client()
-    all_tools = await client.get_tools()
-    if _own_client:
-        print(f"[bug_mechanics] got {len(all_tools)} tools, filtering to bug_mechanics stage...", flush=True)
+        all_tools = await client.get_tools()
+    print(f"[bug_mechanics] got {len(all_tools)} tools, filtering to bug_mechanics stage...", flush=True)
     stage_tools = safe_tools(filter_tools(all_tools, "bug_mechanics"))
 
     class _MechanicsOutput(BaseModel):

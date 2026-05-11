@@ -47,13 +47,15 @@ class _IntegrationOutput(BaseModel):
     integration_tests: list[_IntegrationTestSpec] = Field(min_length=1)
 
 
-async def run_integration(state: "AnalysisState", llm: Any) -> dict:
+async def run_integration(state: "AnalysisState", llm: Any, all_tools: list | None = None) -> dict:
     components = state.get("affected_components", [])
     if not components:
         return {}
 
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
+    if all_tools is None:
+        print("[integration] starting MCP client (no pre-fetched tools)...", flush=True)
+        client = get_mcp_client()
+        all_tools = await client.get_tools()
     stage_tools = safe_tools(filter_tools(all_tools, "integration"))
 
     integration_results: list[dict] = []

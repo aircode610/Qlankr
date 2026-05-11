@@ -1,12 +1,63 @@
 import { useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle, AlertTriangle, Layers, Code, Eye, ExternalLink } from '@/lib/lucide-icons';
-import type { AnalyzeResult, AffectedComponent, UnitTestSpec, IntegrationTestSpec, E2ETestPlan } from '../services/types';
+import type { AnalyzeResult, AffectedComponent, UnitTestSpec, IntegrationTestSpec, E2ETestPlan, WorkflowId } from '../services/types';
 
 const CONFIDENCE_STYLES: Record<string, string> = {
   critical: 'border-red-500/40 bg-red-500/10 text-red-400',
   high: 'border-orange-500/40 bg-orange-500/10 text-orange-400',
   medium: 'border-yellow-500/40 bg-yellow-500/10 text-yellow-400',
   low: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
+};
+
+/* ── Collapsible Test Case Row ── */
+const TestCaseRow = ({ tc }: { tc: { name: string; scenario: string; expected: string } }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded bg-elevated/50">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start gap-2 px-2.5 py-2 text-left"
+      >
+        {open
+          ? <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />
+          : <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />}
+        <span className="font-mono text-[11px] font-medium text-text-primary leading-snug">{tc.name}</span>
+        {!open && (
+          <span className="ml-auto shrink-0 max-w-[40%] truncate text-[10px] text-text-muted">{tc.scenario}</span>
+        )}
+      </button>
+      {open && (
+        <div className="border-t border-border-subtle px-2.5 pb-2 pt-1.5">
+          <p className="text-[11px] text-text-muted leading-relaxed">{tc.scenario}</p>
+          <p className="mt-1 text-[11px] text-emerald-400">→ {tc.expected}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ── Collapsible E2E Step Row ── */
+const E2EStepRow = ({ step }: { step: { step: number; action: string; expected: string } }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded bg-elevated/50">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start gap-2 px-2.5 py-2 text-left"
+      >
+        {open
+          ? <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />
+          : <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />}
+        <span className="shrink-0 font-mono text-[10px] font-medium text-accent">{step.step}.</span>
+        <span className="text-[11px] text-text-primary leading-snug">{step.action}</span>
+      </button>
+      {open && (
+        <div className="border-t border-border-subtle px-2.5 pb-2 pt-1.5">
+          <p className="text-[11px] text-emerald-400">→ {step.expected}</p>
+        </div>
+      )}
+    </div>
+  );
 };
 
 /* ── Unit Test Card ── */
@@ -32,11 +83,7 @@ const UnitTestCard = ({ spec }: { spec: UnitTestSpec }) => {
           )}
           <div className="flex flex-col gap-1.5">
             {spec.test_cases.map((tc, i) => (
-              <div key={i} className="rounded bg-elevated/50 px-2.5 py-2">
-                <p className="font-mono text-[11px] font-medium text-text-primary">{tc.name}</p>
-                <p className="mt-0.5 text-[11px] text-text-muted">{tc.scenario}</p>
-                <p className="mt-1 text-[11px] text-emerald-400">→ {tc.expected}</p>
-              </div>
+              <TestCaseRow key={i} tc={tc} />
             ))}
           </div>
           {spec.generated_code && (
@@ -72,11 +119,7 @@ const IntegrationTestCard = ({ spec }: { spec: IntegrationTestSpec }) => {
           {spec.data_setup && <p className="mb-2 text-[11px] text-text-muted">{spec.data_setup}</p>}
           <div className="flex flex-col gap-1.5">
             {spec.test_cases.map((tc, i) => (
-              <div key={i} className="rounded bg-elevated/50 px-2.5 py-2">
-                <p className="font-mono text-[11px] font-medium text-text-primary">{tc.name}</p>
-                <p className="mt-0.5 text-[11px] text-text-muted">{tc.scenario}</p>
-                <p className="mt-1 text-[11px] text-emerald-400">→ {tc.expected}</p>
-              </div>
+              <TestCaseRow key={i} tc={tc} />
             ))}
           </div>
         </div>
@@ -105,13 +148,7 @@ const E2EPlanCard = ({ plan }: { plan: E2ETestPlan }) => {
           {plan.preconditions && <p className="mb-2 text-[11px] text-text-muted">Pre: {plan.preconditions}</p>}
           <ol className="flex flex-col gap-1.5">
             {plan.steps.map((step) => (
-              <li key={step.step} className="flex gap-2 rounded bg-elevated/50 px-2.5 py-2">
-                <span className="shrink-0 font-mono text-[10px] font-medium text-accent">{step.step}.</span>
-                <div>
-                  <p className="text-[11px] text-text-primary">{step.action}</p>
-                  <p className="mt-0.5 text-[11px] text-emerald-400">→ {step.expected}</p>
-                </div>
-              </li>
+              <E2EStepRow key={step.step} step={step} />
             ))}
           </ol>
         </div>
@@ -138,10 +175,25 @@ const FileLink = ({ file, allFiles, onFileNavigate }: { file: string; allFiles: 
 };
 
 /* ── Component Card ── */
-const ComponentResultCard = ({ component, allFiles, onFileNavigate }: { component: AffectedComponent; allFiles: string[]; onFileNavigate?: (path: string, allFiles?: string[]) => void }) => {
+const ComponentResultCard = ({
+  component,
+  allFiles,
+  onFileNavigate,
+  activeWorkflow,
+}: {
+  component: AffectedComponent;
+  allFiles: string[];
+  onFileNavigate?: (path: string, allFiles?: string[]) => void;
+  activeWorkflow?: WorkflowId;
+}) => {
   const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'unit' | 'integration'>('unit');
   const confStyle = CONFIDENCE_STYLES[component.confidence] || CONFIDENCE_STYLES.medium;
+
+  const showIntegrationTab = !activeWorkflow || activeWorkflow === 'integration_tests';
+  const hasUnitTests = (component.unit_tests?.length ?? 0) > 0;
+  const hasIntegrationTests = (component.integration_tests?.length ?? 0) > 0;
+  const showTestTabs = hasUnitTests || (hasIntegrationTests && showIntegrationTab);
 
   return (
     <div className="rounded-lg border border-border-default bg-elevated">
@@ -183,20 +235,24 @@ const ComponentResultCard = ({ component, allFiles, onFileNavigate }: { componen
             </div>
           )}
 
-          {/* Sprint 2: Unit / Integration tabs */}
-          {((component.unit_tests?.length ?? 0) > 0 || (component.integration_tests?.length ?? 0) > 0) && (
+          {/* Unit / Integration tabs */}
+          {showTestTabs && (
             <>
               <div className="mb-2 flex gap-1 border-b border-border-subtle pb-2">
-                <button onClick={() => setActiveTab('unit')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'unit' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
-                  Unit ({component.unit_tests?.length ?? 0})
-                </button>
-                <button onClick={() => setActiveTab('integration')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'integration' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
-                  Integration ({component.integration_tests?.length ?? 0})
-                </button>
+                {hasUnitTests && (
+                  <button onClick={() => setActiveTab('unit')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'unit' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
+                    Unit ({component.unit_tests?.length ?? 0})
+                  </button>
+                )}
+                {showIntegrationTab && hasIntegrationTests && (
+                  <button onClick={() => setActiveTab('integration')} className={`rounded px-2 py-1 text-xs transition-colors ${activeTab === 'integration' ? 'bg-accent/20 text-accent' : 'text-text-muted hover:text-text-secondary'}`}>
+                    Integration ({component.integration_tests?.length ?? 0})
+                  </button>
+                )}
               </div>
               <div className="flex flex-col gap-2">
                 {activeTab === 'unit' && component.unit_tests?.map((spec, i) => <UnitTestCard key={i} spec={spec} />)}
-                {activeTab === 'integration' && component.integration_tests?.map((spec, i) => <IntegrationTestCard key={i} spec={spec} />)}
+                {activeTab === 'integration' && showIntegrationTab && component.integration_tests?.map((spec, i) => <IntegrationTestCard key={i} spec={spec} />)}
               </div>
             </>
           )}
@@ -212,10 +268,14 @@ interface TestPipelineResultsProps {
   result: AnalyzeResult;
   onHighlightFiles: (filePaths: string[]) => void;
   onFileNavigate?: (filePath: string, allFiles?: string[]) => void;
+  activeWorkflow?: WorkflowId;
 }
 
-export const TestPipelineResults = ({ result, onHighlightFiles, onFileNavigate }: TestPipelineResultsProps) => {
-  const [activeSection, setActiveSection] = useState<'components' | 'e2e'>('components');
+export const TestPipelineResults = ({ result, onHighlightFiles, onFileNavigate, activeWorkflow }: TestPipelineResultsProps) => {
+  const defaultSection = activeWorkflow === 'e2e_planning' ? 'e2e' : 'components';
+  const [activeSection, setActiveSection] = useState<'components' | 'e2e'>(defaultSection);
+
+  const showE2ETab = !activeWorkflow || activeWorkflow === 'e2e_planning';
 
   const allFiles = result.affected_components.flatMap((c) => c.files_changed);
 
@@ -260,12 +320,14 @@ export const TestPipelineResults = ({ result, onHighlightFiles, onFileNavigate }
         >
           Components ({result.affected_components.length})
         </button>
-        <button
-          onClick={() => setActiveSection('e2e')}
-          className={`border-b-2 px-3 py-2 text-xs transition-colors ${activeSection === 'e2e' ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-secondary'}`}
-        >
-          E2E Plans ({result.e2e_test_plans?.length ?? 0})
-        </button>
+        {showE2ETab && (
+          <button
+            onClick={() => setActiveSection('e2e')}
+            className={`border-b-2 px-3 py-2 text-xs transition-colors ${activeSection === 'e2e' ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-secondary'}`}
+          >
+            E2E Plans ({result.e2e_test_plans?.length ?? 0})
+          </button>
+        )}
       </div>
 
       {/* Content */}
@@ -278,11 +340,12 @@ export const TestPipelineResults = ({ result, onHighlightFiles, onFileNavigate }
                 component={comp}
                 allFiles={allFiles}
                 onFileNavigate={onFileNavigate}
+                activeWorkflow={activeWorkflow}
               />
             ))}
           </div>
         )}
-        {activeSection === 'e2e' && (
+        {activeSection === 'e2e' && showE2ETab && (
           <div className="flex flex-col gap-2">
             {(result.e2e_test_plans ?? []).length === 0 ? (
               <p className="py-4 text-center text-xs text-text-muted">No E2E plans generated</p>

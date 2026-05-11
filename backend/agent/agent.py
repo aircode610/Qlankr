@@ -11,8 +11,17 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
 
-from agent.tools import get_mcp_client
+from contextlib import AsyncExitStack
+
+from agent.tools import get_mcp_client, open_persistent_mcp_sessions
 from indexer import get_repo_name
+
+# ── Shared MCP tools (one set of persistent sessions per active run) ─────────
+# Opened once in _start_graph/_resume_graph via open_persistent_mcp_sessions(),
+# kept alive across all stage yields, then closed after the stream ends.
+# Tools are bound to their live sessions — no new server spawns per tool call.
+
+_run_tools: dict[str, list] = {}
 from models import (
     AgentStepEvent,
     CheckpointEvent,
@@ -88,12 +97,12 @@ class BugReproductionState(TypedDict):
 
 async def gather_node(state: AnalysisState) -> dict:
     from agent.stages.gather import run_gather
-    return await run_gather(state, _llm)
+    return await run_gather(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 async def unit_tests_node(state: AnalysisState) -> dict:
     from agent.stages.unit import run_unit
-    return await run_unit(state, _llm)
+    return await run_unit(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 def checkpoint_node(state: AnalysisState) -> dict:
     """
@@ -200,12 +209,12 @@ def e2e_checkpoint_node(state: AnalysisState) -> dict:
 
 async def integration_tests_node(state: AnalysisState) -> dict:
     from agent.stages.integration import run_integration
-    return await run_integration(state, _llm)
+    return await run_integration(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 async def e2e_planning_node(state: AnalysisState) -> dict:
     from agent.stages.e2e import run_e2e
-    return await run_e2e(state, _llm)
+    return await run_e2e(state, _llm, all_tools=_run_tools.get(state.get("session_id", "")))
 
 
 def submit_node(state: AnalysisState) -> dict:
@@ -384,35 +393,47 @@ async def _start_graph(
     if owner_repo:
         repo_name = get_repo_name(f"{owner_repo[0]}/{owner_repo[1]}")
 
-    # Pre-fetch GitNexus process list + repo stats before graph starts
-    # so gather/e2e stages don't waste tool call budget on basic context.
-    from agent.prefetch import prefetch_context
-    prefetched = await prefetch_context(pr_url, repo_name)
+    # Open persistent MCP sessions for the full pipeline run.
+    # Tools are bound to their live server processes — no new spawn per tool call.
+    print("[agent] opening persistent MCP sessions...", flush=True)
+    async with AsyncExitStack() as stack:
+        all_tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+        _run_tools[thread_id] = all_tools
+        print(f"[agent] {len(all_tools)} MCP tools ready on persistent sessions", flush=True)
 
-    initial_state: AnalysisState = {
-        "pr_url": pr_url,
-        "repo_name": repo_name,
-        "user_context": context,
-        "session_id": thread_id,
-        "pr_diff": "",
-        "pr_files": [],
-        "pr_metadata": {},
-        "processes": prefetched["processes"],
-        "repo_stats": prefetched["stats"],
-        "affected_components": [],
-        "integration_tests": [],
-        "e2e_test_plans": [],
-        "current_stage": "gather",
-        "tool_calls_used": 0,
-        "messages": [],
-        "user_choice": None,
-        "unit_feedback": None,
-    }
+        # Pre-fetch GitNexus process list + repo stats before graph starts
+        # so gather/e2e stages don't waste tool call budget on basic context.
+        from agent.prefetch import prefetch_context
+        prefetched = await prefetch_context(pr_url, repo_name, all_tools=all_tools)
 
-    _sessions[thread_id] = {"pr_url": pr_url, "repo_name": repo_name}
+        initial_state: AnalysisState = {
+            "pr_url": pr_url,
+            "repo_name": repo_name,
+            "user_context": context,
+            "session_id": thread_id,
+            "pr_diff": "",
+            "pr_files": [],
+            "pr_metadata": {},
+            "processes": prefetched["processes"],
+            "repo_stats": prefetched["stats"],
+            "affected_components": [],
+            "integration_tests": [],
+            "e2e_test_plans": [],
+            "current_stage": "gather",
+            "tool_calls_used": 0,
+            "messages": [],
+            "user_choice": None,
+            "unit_feedback": None,
+        }
 
-    async for event in _stream_graph(_get_graph(), initial_state, config, thread_id, pr_url):
-        yield event
+        _sessions[thread_id] = {"pr_url": pr_url, "repo_name": repo_name}
+
+        try:
+            async for event in _stream_graph(_get_graph(), initial_state, config, thread_id, pr_url):
+                yield event
+        finally:
+            _run_tools.pop(thread_id, None)
+    # AsyncExitStack.__aexit__ runs here — all server processes terminated cleanly
 
 
 async def _resume_graph(
@@ -426,10 +447,17 @@ async def _resume_graph(
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
     pr_url = _sessions[session_id].get("pr_url", "")
 
-    async for event in _stream_graph(
-        _get_graph(), Command(resume=user_response), config, session_id, pr_url
-    ):
-        yield event
+    # Re-open persistent sessions for this resume segment
+    async with AsyncExitStack() as stack:
+        all_tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+        _run_tools[session_id] = all_tools
+        try:
+            async for event in _stream_graph(
+                _get_graph(), Command(resume=user_response), config, session_id, pr_url
+            ):
+                yield event
+        finally:
+            _run_tools.pop(session_id, None)
 
 
 async def _stream_graph(

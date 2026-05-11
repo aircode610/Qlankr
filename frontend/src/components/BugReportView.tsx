@@ -54,6 +54,40 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+// ── Reproduction step row ──────────────────────────────────────────────────────
+
+const StepRow = ({ step, index }: { step: { action: string; expected?: string }; index: number }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <li className="flex gap-3">
+      <button
+        onClick={() => step.expected && setOpen(!open)}
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-bold transition-colors ${
+          step.expected
+            ? 'cursor-pointer border-accent/30 bg-accent/10 text-accent hover:bg-accent/20'
+            : 'cursor-default border-accent/20 bg-accent/5 text-accent/60'
+        }`}
+      >
+        {index + 1}
+      </button>
+      <div className="flex-1 pt-0.5">
+        <p className="text-xs text-text-primary">{step.action}</p>
+        {open && step.expected && (
+          <p className="mt-1 text-[11px] text-emerald-400">Expected: {step.expected}</p>
+        )}
+        {!open && step.expected && (
+          <button
+            onClick={() => setOpen(true)}
+            className="mt-0.5 text-[10px] text-text-muted hover:text-accent"
+          >
+            + show expected
+          </button>
+        )}
+      </div>
+    </li>
+  );
+};
+
 // ── Section wrapper ───────────────────────────────────────────────────────────
 
 function Section({
@@ -264,19 +298,7 @@ export const BugReportView = ({ report, sessionId, onFileNavigate }: BugReportVi
           <Section title="Reproduction Steps" copyText={stepsText}>
             <ol className="flex flex-col gap-3">
               {report.reproduction_steps.map((step, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent/10 text-[10px] font-bold text-accent">
-                    {i + 1}
-                  </span>
-                  <div className="flex-1 pt-0.5">
-                    <p className="text-xs text-text-primary">{step.action}</p>
-                    {step.expected && (
-                      <p className="mt-1 text-[11px] text-emerald-400">
-                        Expected: {step.expected}
-                      </p>
-                    )}
-                  </div>
-                </li>
+                <StepRow key={i} step={step} index={i} />
               ))}
             </ol>
           </Section>
