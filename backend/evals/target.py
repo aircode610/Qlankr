@@ -59,7 +59,10 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
             if interrupt_type == "checkpoint":
                 ir = payload.get("intermediate_result", {})
                 unit_intermediate = ir.get("affected_components", [])
-            break  # paused — need to resume
+            # Don't `break` here — letting the generator finish naturally
+            # allows its AsyncExitStack to close persistent MCP subprocesses
+            # in the same async task they were opened in. Breaking early raises
+            # GeneratorExit mid-cleanup → anyio cancel-scope crash.
         elif etype == "result":
             result = data
         elif etype == "error":
@@ -102,7 +105,7 @@ async def _run_full_pipeline(pr_url: str, path: str = "integration") -> dict:
                 if interrupt_type == "checkpoint":
                     ir = payload.get("intermediate_result", {})
                     unit_intermediate = ir.get("affected_components", [])
-                break  # paused again
+                # Don't `break` — see Phase 1 comment.
             elif etype == "result":
                 result = data
             elif etype == "error":
@@ -171,7 +174,7 @@ async def agent_target_gather_only(inputs: dict) -> dict:
                 "affected_components": unit_intermediate,
                 "agent_steps": len(tool_calls),
             }
-            break
+            # Don't `break` — see _run_full_pipeline Phase 1 comment.
         elif etype == "result":
             result = data
         elif etype == "error":

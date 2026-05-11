@@ -447,17 +447,15 @@ async def _resume_graph(
     config = {"configurable": {"thread_id": session_id}, "recursion_limit": 100}
     pr_url = _sessions[session_id].get("pr_url", "")
 
-    # Re-open persistent sessions for this resume segment
-    async with AsyncExitStack() as stack:
-        all_tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
-        _run_tools[session_id] = all_tools
-        try:
-            async for event in _stream_graph(
-                _get_graph(), Command(resume=user_response), config, session_id, pr_url
-            ):
-                yield event
-        finally:
-            _run_tools.pop(session_id, None)
+    # Skip persistent MCP sessions on the resume path: anyio's stdio subprocess
+    # machinery breaks when sessions are opened-closed-reopened across separate
+    # async-generator entries (run_agent → break at checkpoint → continue_agent).
+    # Stages fall back to per-stage MCP clients when _run_tools[session_id] is
+    # absent — slower per resume, but works reliably.
+    async for event in _stream_graph(
+        _get_graph(), Command(resume=user_response), config, session_id, pr_url
+    ):
+        yield event
 
 
 async def _stream_graph(
