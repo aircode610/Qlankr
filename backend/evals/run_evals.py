@@ -54,7 +54,8 @@ from evals.evaluators import (
     pipeline_progression,
     no_crash,
     # LLM judges
-    groundedness,
+    surface_groundedness,
+    depth_groundedness,
     risk_quality,
     component_matching,
     unit_test_quality,
@@ -80,7 +81,8 @@ _BASE_EVALUATORS = [
     confidence_calibration,
     component_matching,
     risk_quality,
-    groundedness,
+    surface_groundedness,
+    depth_groundedness,
 ]
 
 # Unit test evaluators (always included — both paths generate unit tests)

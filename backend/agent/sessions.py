@@ -88,3 +88,50 @@ def update_session(session_id: str, **kwargs) -> None:
 def clear_sessions() -> None:
     """Reset store (used by tests)."""
     _sessions.clear()
+
+
+# ── Supabase persistence hooks ───────────────────────────────────────────
+# Per-stage outputs are not yet wired into the LangGraph nodes (follow-up).
+# These helpers persist run start + final result so history views work.
+
+def persist_pr_analysis_start(
+    user_id, session_id: str, project_id: str, pr_url: str,
+    pr_number: int | None = None, pr_title: str | None = None,
+) -> None:
+    import logging
+    try:
+        from db import user_scoped  # noqa: PLC0415
+        scoped = user_scoped(user_id)
+        scoped.table("pr_analyses").insert({
+            "id": session_id,
+            "project_id": project_id,
+            "pr_url": pr_url,
+            "pr_number": pr_number,
+            "pr_title": pr_title,
+            "status": "running",
+        }).execute()
+    except Exception as e:
+        logging.error("persist_pr_analysis_start failed for %s: %s", session_id, e)
+
+
+def persist_pr_analysis_finalize(
+    user_id, session_id: str, *,
+    status: str, final_result: dict | None = None,
+    failure_reason: str | None = None,
+) -> None:
+    import logging
+    from datetime import datetime, timezone  # noqa: PLC0415
+    try:
+        from db import user_scoped  # noqa: PLC0415
+        payload: dict = {
+            "status": status,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if final_result is not None:
+            payload["final_result"] = final_result
+        if failure_reason is not None:
+            payload["failure_reason"] = failure_reason
+        scoped = user_scoped(user_id)
+        scoped.table("pr_analyses").update(payload).eq("id", session_id).execute()
+    except Exception as e:
+        logging.error("persist_pr_analysis_finalize failed for %s: %s", session_id, e)

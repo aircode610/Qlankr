@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Send } from '@/lib/lucide-icons';
-import { getIntegrations, updateIntegration } from '../services/api';
+import { getIntegrations, updateIntegration, getCredentialStatus, saveCredentials } from '../services/api';
+import type { CredentialStatus } from '../services/api';
 import type { IntegrationStatus } from '../services/types';
 
 const INTEGRATION_ORDER = [
@@ -58,6 +59,10 @@ export const SettingsPanel = () => {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState<Record<string, Record<string, string>>>({});
+  const [credStatus, setCredStatus] = useState<CredentialStatus | null>(null);
+  const [anthropicKey, setAnthropicKey] = useState('');
+  const [githubToken, setGithubToken] = useState('');
+  const [savingKeys, setSavingKeys] = useState(false);
 
   const fieldsBy = useMemo(() => FIELD_PRESETS, []);
 
@@ -73,7 +78,24 @@ export const SettingsPanel = () => {
 
   useEffect(() => {
     void load();
+    getCredentialStatus().then(setCredStatus).catch(() => void 0);
   }, [load]);
+
+  const saveApiKeys = async () => {
+    const body: { anthropic_api_key?: string; github_token?: string } = {};
+    if (anthropicKey) body.anthropic_api_key = anthropicKey;
+    if (githubToken) body.github_token = githubToken;
+    if (!body.anthropic_api_key && !body.github_token) return;
+    setSavingKeys(true);
+    try {
+      await saveCredentials(body);
+      setAnthropicKey('');
+      setGithubToken('');
+      setCredStatus(await getCredentialStatus());
+    } finally {
+      setSavingKeys(false);
+    }
+  };
 
   const onField = (name: string, key: string, v: string) => {
     setDirty((d) => ({
@@ -135,6 +157,47 @@ export const SettingsPanel = () => {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto bg-void p-6">
       <div className="mx-auto w-full max-w-3xl">
+        <section className="mb-6 rounded-xl border border-border-subtle bg-elevated p-4">
+          <h2 className="mb-3 text-base font-semibold text-text-primary">API Keys</h2>
+          <p className="mb-3 text-xs text-text-muted">
+            Your own Anthropic and GitHub credentials. Stored per-user in Supabase.
+          </p>
+          <label className="mb-2 block text-xs text-text-secondary">
+            <span className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-text-muted">
+              <span>Anthropic API key</span>
+              <span>{credStatus?.has_anthropic_api_key ? '✓ set' : 'missing'}</span>
+            </span>
+            <input
+              type="password"
+              placeholder="sk-ant-..."
+              value={anthropicKey}
+              onChange={(e) => setAnthropicKey(e.target.value)}
+              className="w-full rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-text-primary"
+            />
+          </label>
+          <label className="mb-3 block text-xs text-text-secondary">
+            <span className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-text-muted">
+              <span>GitHub token</span>
+              <span>{credStatus?.has_github_token ? '✓ set' : 'missing'}</span>
+            </span>
+            <input
+              type="password"
+              placeholder="ghp_..."
+              value={githubToken}
+              onChange={(e) => setGithubToken(e.target.value)}
+              className="w-full rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-text-primary"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void saveApiKeys()}
+            disabled={savingKeys || (!anthropicKey && !githubToken)}
+            className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-dim disabled:opacity-50"
+          >
+            {savingKeys ? 'Saving…' : 'Save API keys'}
+          </button>
+        </section>
+
         <h1 className="mb-1 text-lg font-semibold text-text-primary">Integrations</h1>
         <p className="mb-6 text-sm text-text-muted">
           Credentials are stored in this browser session and applied on the server process for health checks. Use Test connection per tool or Save all for a batch.

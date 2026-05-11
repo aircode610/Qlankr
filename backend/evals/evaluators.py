@@ -24,7 +24,6 @@ from collections import Counter
 import httpx
 from langchain_anthropic import ChatAnthropic
 
-
 # ── PR diff fetcher (shared by diff-aware judges) ─────────────────────────────
 # Module-level cache so the same PR isn't fetched once per evaluator. Keyed by
 # pr_url, value is the diff text (or None if the fetch failed).
@@ -365,37 +364,161 @@ def _parse_judge_response(content: str) -> dict:
         return {"score": 0.5, "reasoning": "Could not parse judge response"}
 
 
-async def groundedness(inputs: dict, outputs: dict) -> dict:
-    """LLM judge: are the agent's claims grounded in real code changes?"""
+async def _fetch_pr_diff(pr_url: str) -> list[dict] | None:
+    """Fetch PR file patches from GitHub REST API. Returns None on failure."""
+    if pr_url in _diff_cache:
+        return _diff_cache[pr_url]
+
+    m = re.search(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)", pr_url)
+    if not m:
+        return None
+
+    owner, repo, number = m.group(1), m.group(2), m.group(3)
+    token = os.environ.get("GITHUB_TOKEN", "")
+    headers = {"Accept": "application/vnd.github+json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files",
+                headers=headers,
+            )
+        if resp.status_code != 200:
+            return None
+        files = resp.json()
+        _diff_cache[pr_url] = files
+        return files
+    except Exception:
+        return None
+
+
+async def surface_groundedness(inputs: dict, outputs: dict) -> dict:
+    """LLM judge: are claims about directly changed code grounded in the real diff?
+
+    Fetches the actual PR diff via GitHub API and asks the judge to verify
+    only claims about directly changed files — transitive/blast-radius findings
+    are evaluated separately by depth_groundedness.
+    """
     components = outputs.get("affected_components", [])
     if not components:
-        return {"key": "groundedness", "score": 0.0}
+        return {"key": "surface_groundedness", "score": 0.0, "comment": "No components"}
+
+    pr_url = inputs.get("pr_url", "")
+    diff_files = await _fetch_pr_diff(pr_url)
+
+    if diff_files is None:
+        return {
+            "key": "surface_groundedness",
+            "score": None,
+            "comment": "diff unavailable (rate limit or private repo without token)",
+        }
+
+    diff_lines = []
+    for f in diff_files:
+        diff_lines.append(f"File: {f.get('filename', '')}")
+        diff_lines.append(f"  +{f.get('additions', 0)} -{f.get('deletions', 0)}")
+        patch = f.get("patch", "")
+        if patch:
+            diff_lines.append(patch[:800])  # cap per-file patch to keep prompt size reasonable
+    diff_text = "\n".join(diff_lines)
 
     formatted = _format_components(components)
+
     prompt = f"""You are evaluating a QA impact analysis of a GitHub pull request.
 
-PR URL: {inputs['pr_url']}
+PR diff (actual file patches — {len(diff_files)} files changed):
+{diff_text}
 
-The agent produced this analysis:
+Agent's component claims (impact summaries and risks):
 {formatted}
 
-Evaluate whether each claim (impact summaries, risks) could reasonably be
-determined from the PR diff and codebase. A grounded claim is one a human
-reviewer reading the same PR would agree with.
+Evaluate: are the claims about DIRECTLY changed code verifiable from this diff?
+Do NOT penalize claims about transitive/downstream effects — those are scored separately.
 
-Score 0.0 to 1.0:
-- 1.0 = all claims well-supported and specific
-- 0.7 = mostly grounded, minor extrapolations
-- 0.4 = mix of grounded and speculative
-- 0.0 = fabricated or contradicted by the code
+Score 0.0–1.0:
+- 1.0 = every claim maps to a real change visible in the diff
+- 0.7 = mostly grounded, one or two minor extrapolations
+- 0.4 = some claims reference files not in the diff without explanation
+- 0.0 = claims contradict the diff or describe unrelated code
 
-Return ONLY a JSON object: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
+Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
 
     response = await _judge.ainvoke([{"role": "user", "content": prompt}])
     result = _parse_judge_response(response.content)
     return {
-        "key": "groundedness",
-        "score": result["score"],
+        "key": "surface_groundedness",
+        "score": result.get("score"),
+        "comment": result.get("reasoning", ""),
+    }
+
+
+async def depth_groundedness(inputs: dict, outputs: dict) -> dict:
+    """LLM judge: are transitive claims consistent with GitNexus blast tool outputs?
+
+    Only applies to Qlankr (has_blast_tools=True). Returns score=None for Claude Code
+    so LangSmith renders N/A rather than 0.0.
+    """
+    if not outputs.get("has_blast_tools", False):
+        return {
+            "key": "depth_groundedness",
+            "score": None,
+            "comment": "N/A (no blast tools)",
+        }
+
+    blast_tools = {"impact", "context", "cypher", "query", "detect_changes"}
+    transcripts = [
+        t for t in outputs.get("tool_transcripts", [])
+        if t.get("tool") in blast_tools
+    ]
+
+    if not transcripts:
+        return {
+            "key": "depth_groundedness",
+            "score": 0.0,
+            "comment": "No blast tool calls found in transcript",
+        }
+
+    # Format transcript entries for the judge
+    transcript_lines = []
+    for t in transcripts[:20]:  # cap to avoid huge prompts
+        transcript_lines.append(
+            f"  {t['tool']}({json.dumps(t.get('input', {}))}) →\n"
+            f"    {json.dumps(t.get('output', {}))[:400]}"
+        )
+    transcript_text = "\n".join(transcript_lines)
+
+    components = outputs.get("affected_components", [])
+    formatted = _format_components(components)
+
+    prompt = f"""You are evaluating whether an AI agent's transitive/downstream claims are
+consistent with the actual GitNexus knowledge-graph tool outputs it received.
+
+GitNexus tool outputs collected during this run:
+{transcript_text}
+
+Agent's component claims (impact summaries and risks):
+{formatted}
+
+Evaluate: are the transitive/downstream claims (claims about components NOT directly
+changed in the diff) consistent with what the GitNexus tools actually returned?
+A claim is grounded if the tool output contains the dependency or process the agent describes.
+A claim is ungrounded if the agent says X is affected but no tool output mentions X.
+
+Score 0.0–1.0:
+- 1.0 = every transitive claim is directly supported by a tool return value
+- 0.7 = most claims supported, one extrapolation beyond tool output
+- 0.3 = agent made claims about components not present in any tool output
+- 0.0 = transitive claims fabricated, contradict tool outputs
+
+Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
+
+    response = await _judge.ainvoke([{"role": "user", "content": prompt}])
+    result = _parse_judge_response(response.content)
+    return {
+        "key": "depth_groundedness",
+        "score": result.get("score"),
         "comment": result.get("reasoning", ""),
     }
 

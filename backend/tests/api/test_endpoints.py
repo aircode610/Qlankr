@@ -14,16 +14,16 @@ async def test_health_returns_ok(client):
     assert response.json() == {"status": "ok"}
 
 
-async def test_index_streams_sse_content_type(client):
+async def test_index_streams_sse_content_type(client, auth_user):
     # Bad URL — returns an error SSE event, but content-type must be text/event-stream
-    response = await client.post("/index", json={"repo_url": "https://github.com/onlyone"})
+    response = await client.post("/index", json={"repo_url": "https://github.com/onlyone"}, headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     assert "text/event-stream" in response.headers["content-type"]
 
 
-async def test_index_bad_url_streams_error_event(client):
+async def test_index_bad_url_streams_error_event(client, auth_user):
     response = await client.post(
-        "/index", json={"repo_url": "https://github.com/onlyone"}
+        "/index", json={"repo_url": "https://github.com/onlyone"}, headers={"Authorization": "Bearer test"}
     )
     events = parse_sse_body(response.text)
     error_events = [e for e in events if e["event"] == "error"]
@@ -31,7 +31,7 @@ async def test_index_bad_url_streams_error_event(client):
     assert "Cannot parse" in error_events[0]["data"]["message"]
 
 
-async def test_index_git_clone_fail_streams_error_event(client):
+async def test_index_git_clone_fail_streams_error_event(client, auth_user, fake_supabase):
     from tests.conftest import parse_sse_body
     from unittest.mock import MagicMock, AsyncMock
 
@@ -44,7 +44,7 @@ async def test_index_git_clone_fail_streams_error_event(client):
 
     with patch("asyncio.create_subprocess_exec", mock_exec):
         response = await client.post(
-            "/index", json={"repo_url": "https://github.com/owner/repo"}
+            "/index", json={"repo_url": "https://github.com/owner/repo"}, headers={"Authorization": "Bearer test"}
         )
 
     events = parse_sse_body(response.text)
@@ -53,13 +53,13 @@ async def test_index_git_clone_fail_streams_error_event(client):
     assert "git clone failed" in error_events[0]["data"]["message"]
 
 
-async def test_index_request_validation(client):
-    response = await client.post("/index", json={})
+async def test_index_request_validation(client, auth_user):
+    response = await client.post("/index", json={}, headers={"Authorization": "Bearer test"})
     assert response.status_code == 422
 
 
-async def test_graph_unindexed_returns_empty(client):
-    response = await client.get("/graph/unknown/repo")
+async def test_graph_unindexed_returns_empty(client, auth_user, fake_supabase):
+    response = await client.get("/graph/unknown/repo", headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     data = response.json()
     assert data["nodes"] == []
@@ -67,15 +67,31 @@ async def test_graph_unindexed_returns_empty(client):
     assert data["clusters"] == []
 
 
-async def test_graph_after_index_returns_data(client):
-    seeded = GraphData(
+async def test_graph_after_index_returns_data(client, auth_user, fake_supabase, monkeypatch):
+    fake_graph = GraphData(
         nodes=[GraphNode(id="n1", label="file.py", type="file", cluster="auth")],
         edges=[],
         clusters=[GraphCluster(id="auth", label="Auth", size=1)],
     )
-    indexer._registry["myorg/myrepo"] = {"path": "/fake", "graph": seeded}
 
-    response = await client.get("/graph/myorg/myrepo")
+    # Seed a project row so get_graph_data finds the repo for this user
+    fake_supabase.table("projects").insert({
+        "user_id": str(auth_user),
+        "owner": "myorg",
+        "repo_name": "myrepo",
+        "repo_url": "https://github.com/myorg/myrepo",
+        "index_status": "ready",
+    }).execute()
+
+    # Monkeypatch get_graph_data in main's namespace (avoids MCP calls)
+    import main as _main
+
+    async def _fake_get_graph_data(user_id, owner, repo):
+        return fake_graph
+
+    monkeypatch.setattr(_main, "get_graph_data", _fake_get_graph_data)
+
+    response = await client.get("/graph/myorg/myrepo", headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     data = response.json()
     assert len(data["nodes"]) == 1
@@ -84,7 +100,7 @@ async def test_graph_after_index_returns_data(client):
 
 
 @pytest.mark.asyncio
-async def test_analyze_accepts_context_field(client):
+async def test_analyze_accepts_context_field(client, auth_user):
     async def fake_run(pr_url, context=None, session_id=None):
         assert pr_url == "https://github.com/o/r/pull/1"
         assert context == "users see a blank screen"
@@ -97,6 +113,7 @@ async def test_analyze_accepts_context_field(client):
                 "pr_url": "https://github.com/o/r/pull/1",
                 "context": "users see a blank screen",
             },
+            headers={"Authorization": "Bearer test"},
         )
     assert response.status_code == 200
     assert "text/event-stream" in response.headers["content-type"]
@@ -105,16 +122,17 @@ async def test_analyze_accepts_context_field(client):
 
 
 @pytest.mark.asyncio
-async def test_analyze_continue_unknown_session_returns_404(client):
+async def test_analyze_continue_unknown_session_returns_404(client, auth_user):
     response = await client.post(
         "/analyze/not-a-real-id/continue",
         json={"action": "approve"},
+        headers={"Authorization": "Bearer test"},
     )
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_analyze_continue_known_session_streams(client):
+async def test_analyze_continue_known_session_streams(client, auth_user):
     from agent import agent as ag
     session = create_session("https://github.com/o/r/pull/2")
     # Impact analysis must register the thread in agent's store for /continue; mirror /analyze start
@@ -122,6 +140,7 @@ async def test_analyze_continue_known_session_streams(client):
     response = await client.post(
         f"/analyze/{session.session_id}/continue",
         json={"action": "approve"},
+        headers={"Authorization": "Bearer test"},
     )
     assert response.status_code == 200
     events = parse_sse_body(response.text)
@@ -132,15 +151,15 @@ async def test_analyze_continue_known_session_streams(client):
 
 
 @pytest.mark.asyncio
-async def test_analyze_status_unknown_returns_404(client):
-    response = await client.get("/analyze/does-not-exist/status")
+async def test_analyze_status_unknown_returns_404(client, auth_user):
+    response = await client.get("/analyze/does-not-exist/status", headers={"Authorization": "Bearer test"})
     assert response.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_analyze_status_returns_payload(client):
+async def test_analyze_status_returns_payload(client, auth_user):
     session = create_session("https://github.com/o/r/pull/3")
-    response = await client.get(f"/analyze/{session.session_id}/status")
+    response = await client.get(f"/analyze/{session.session_id}/status", headers={"Authorization": "Bearer test"})
     assert response.status_code == 200
     data = response.json()
     assert data["session_id"] == session.session_id
@@ -149,6 +168,6 @@ async def test_analyze_status_returns_payload(client):
 
 
 @pytest.mark.asyncio
-async def test_run_tests_returns_501(client):
-    response = await client.post("/run-tests", json={"session_id": "abc"})
+async def test_run_tests_returns_501(client, auth_user):
+    response = await client.post("/run-tests", json={"session_id": "abc"}, headers={"Authorization": "Bearer test"})
     assert response.status_code == 501

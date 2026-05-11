@@ -89,6 +89,36 @@
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT MODE OVERRIDES
+   Applied when :root has the "light" class (toggled via useTheme)
+═══════════════════════════════════════════════════════════════ */
+:root.light {
+  /* Backgrounds */
+  --color-void: #f1f5f9;
+  --color-deep: #e2e8f0;
+  --color-surface: #ffffff;
+  --color-elevated: #f8fafc;
+  --color-hover: #f1f5f9;
+
+  /* Borders */
+  --color-border-subtle: #e2e8f0;
+  --color-border-default: #cbd5e1;
+
+  /* Text */
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+
+  /* Accent — blue instead of purple for light mode */
+  --color-accent: #2563eb;
+  --color-accent-dim: #1d4ed8;
+
+  /* Shadows */
+  --shadow-glow: 0 0 20px rgba(37, 99, 235, 0.3);
+  --shadow-glow-soft: 0 0 40px rgba(37, 99, 235, 0.12);
+}
+
 * { box-sizing: border-box; }
 
 html, body, #root { height: 100%; }
@@ -104,7 +134,7 @@ body {
 /* Custom Scrollbar */
 .scrollbar-thin {
   scrollbar-width: thin;
-  scrollbar-color: #2a2a3a #0a0a10;
+  scrollbar-color: var(--color-border-default) var(--color-deep);
 }
 .scrollbar-thin::-webkit-scrollbar { width: 8px; height: 8px; }
 .scrollbar-thin::-webkit-scrollbar-track { background: var(--color-deep); }

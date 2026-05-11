@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sigma/edge-curve": "^3.1.0",
+    "@supabase/supabase-js": "^2.105.4",
     "@tailwindcss/vite": "^4.1.18",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
@@ -20,6 +21,7 @@
     "qlankr-shared": "file:../shared",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.3",
     "sigma": "^3.0.2",
     "tailwindcss": "^4.2.4"
   },

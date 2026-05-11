@@ -7,6 +7,7 @@ import noverlap from 'graphology-layout-noverlap';
 import EdgeCurveProgram from '@sigma/edge-curve';
 import { SigmaNodeAttributes, SigmaEdgeAttributes } from '../lib/graph-adapter';
 import type { EdgeType } from '../lib/constants';
+import type { Theme } from './useTheme';
 
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -18,9 +19,15 @@ const hexToRgb = (hex: string) => {
 const rgbToHex = (r: number, g: number, b: number): string =>
   '#' + [r, g, b].map((x) => Math.max(0, Math.min(255, Math.round(x))).toString(16).padStart(2, '0')).join('');
 
-const dimColor = (hex: string, amount: number): string => {
+// Returns the background RGB for dimming — adapts to current theme
+const getBgRgb = (theme: Theme) =>
+  theme === 'light'
+    ? { r: 248, g: 249, b: 252 }  // --color-elevated light
+    : { r: 18, g: 18, b: 28 };    // #12121c dark
+
+const dimColor = (hex: string, amount: number, theme: Theme): string => {
   const rgb = hexToRgb(hex);
-  const bg = { r: 18, g: 18, b: 28 };
+  const bg = getBgRgb(theme);
   return rgbToHex(bg.r + (rgb.r - bg.r) * amount, bg.g + (rgb.g - bg.g) * amount, bg.b + (rgb.b - bg.b) * amount);
 };
 
@@ -40,6 +47,7 @@ interface UseSigmaOptions {
   highlightedNodeIds?: Set<string>;
   affectedFileIds?: Set<string>;
   visibleEdgeTypes?: EdgeType[];
+  theme?: Theme;
 }
 
 interface UseSigmaReturn {
@@ -94,6 +102,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const highlightedRef = useRef<Set<string>>(new Set());
   const affectedRef = useRef<Set<string>>(new Set());
   const visibleEdgeTypesRef = useRef<EdgeType[] | null>(null);
+  const themeRef = useRef<Theme>(options.theme ?? 'dark');
   const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isLayoutRunning, setIsLayoutRunning] = useState(false);
   const [selectedNode, setSelectedNodeState] = useState<string | null>(null);
@@ -104,6 +113,17 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     visibleEdgeTypesRef.current = options.visibleEdgeTypes || null;
     sigmaRef.current?.refresh();
   }, [options.highlightedNodeIds, options.affectedFileIds, options.visibleEdgeTypes]);
+
+  // Sync theme ref and update Sigma label color on theme change
+  useEffect(() => {
+    const theme = options.theme ?? 'dark';
+    themeRef.current = theme;
+    const sigma = sigmaRef.current;
+    if (sigma) {
+      sigma.setSetting('labelColor', { color: theme === 'light' ? '#0f1117' : '#e4e4ed' });
+      sigma.refresh();
+    }
+  }, [options.theme]);
 
   const setSelectedNode = useCallback((nodeId: string | null) => {
     selectedNodeRef.current = nodeId;
@@ -137,6 +157,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       defaultDrawNodeHover: (context, data, settings) => {
         const label = data.label;
         if (!label) return;
+        const isDark = themeRef.current !== 'light';
         const size = settings.labelSize || 11;
         const font = settings.labelFont || 'JetBrains Mono, monospace';
         const weight = settings.labelWeight || '500';
@@ -148,14 +169,14 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
         const paddingX = 8, paddingY = 5;
         const height = size + paddingY * 2;
         const width = textWidth + paddingX * 2;
-        context.fillStyle = '#12121c';
+        context.fillStyle = isDark ? '#12121c' : '#ffffff';
         context.beginPath();
         context.roundRect(x - width / 2, y - height / 2, width, height, 4);
         context.fill();
         context.strokeStyle = data.color || '#6366f1';
         context.lineWidth = 2;
         context.stroke();
-        context.fillStyle = '#f5f5f7';
+        context.fillStyle = isDark ? '#f5f5f7' : '#0f1117';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(label, x, y);
@@ -197,7 +218,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             res.zIndex = 2;
             res.highlighted = true;
           } else {
-            res.color = dimColor(data.color, 0.15);
+            res.color = dimColor(data.color, 0.15, themeRef.current);
             res.size = (data.size || 8) * 0.4;
             res.zIndex = 0;
           }
@@ -211,7 +232,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             res.zIndex = 2;
             res.highlighted = true;
           } else {
-            res.color = dimColor(data.color, 0.2);
+            res.color = dimColor(data.color, 0.2, themeRef.current);
             res.size = (data.size || 8) * 0.5;
             res.zIndex = 0;
           }
@@ -231,7 +252,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
               res.size = (data.size || 8) * 1.3;
               res.zIndex = 1;
             } else {
-              res.color = dimColor(data.color, 0.25);
+              res.color = dimColor(data.color, 0.25, themeRef.current);
               res.size = (data.size || 8) * 0.6;
               res.zIndex = 0;
             }
@@ -263,11 +284,11 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
               res.size = Math.max(2, (data.size || 1) * 3);
               res.zIndex = 2;
             } else if (isSourceActive || isTargetActive) {
-              res.color = dimColor('#06b6d4', 0.4);
+              res.color = dimColor('#06b6d4', 0.4, themeRef.current);
               res.size = 1;
               res.zIndex = 1;
             } else {
-              res.color = dimColor(data.color, 0.08);
+              res.color = dimColor(data.color, 0.08, themeRef.current);
               res.size = 0.2;
               res.zIndex = 0;
             }
@@ -284,7 +305,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
               res.size = Math.max(3, (data.size || 1) * 4);
               res.zIndex = 2;
             } else {
-              res.color = dimColor(data.color, 0.1);
+              res.color = dimColor(data.color, 0.1, themeRef.current);
               res.size = 0.3;
               res.zIndex = 0;
             }

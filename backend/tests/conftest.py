@@ -3,7 +3,6 @@ import json
 import httpx
 import pytest
 
-import indexer
 from agent.bug_run_registry import clear_bug_runs
 from agent.sessions import clear_sessions
 from main import app
@@ -19,12 +18,10 @@ async def client():
 
 
 @pytest.fixture(autouse=True)
-def reset_registry():
-    indexer._registry.clear()
+def reset_sessions():
     clear_sessions()
     clear_bug_runs()
     yield
-    indexer._registry.clear()
     clear_sessions()
     clear_bug_runs()
 
@@ -47,3 +44,38 @@ def parse_sse_body(text: str) -> list[dict]:
                     data = raw
         results.append({"event": event, "data": data})
     return results
+
+
+from uuid import UUID, uuid4
+
+import db
+from tests.fake_supabase import FakeSupabaseClient
+
+
+@pytest.fixture
+def fake_supabase(monkeypatch):
+    fake = FakeSupabaseClient()
+    monkeypatch.setattr(db, "get_client", lambda: fake)
+    return fake
+
+
+@pytest.fixture
+def auth_user(monkeypatch):
+    """Bypass JWT verification; every request authenticates as this user."""
+    uid = uuid4()
+
+    async def _override():
+        return uid
+
+    from auth import get_current_user
+    from main import app
+
+    app.dependency_overrides[get_current_user] = _override
+    yield uid
+    app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture
+def second_user(monkeypatch):
+    uid = uuid4()
+    yield uid

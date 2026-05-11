@@ -82,6 +82,7 @@ If you're a developer who also handles QA, or a QA lead trying to improve report
 ## Prerequisites
 
 - Docker & Docker Compose
+- A free [Supabase](https://supabase.com/) project (for auth + persistence)
 - An [Anthropic API key](https://console.anthropic.com/)
 - A GitHub Personal Access Token (minimum `public_repo` scope)
 
@@ -89,31 +90,32 @@ If you're a developer who also handles QA, or a QA lead trying to improve report
 
 ## Setup
 
-**1. Clone and configure:**
+**1. Create a Supabase project.**
+
+Sign up at https://supabase.com, create a project, and from **Project Settings → API** copy:
+- *Project URL* → `SUPABASE_URL` and `VITE_SUPABASE_URL`
+- *Publishable key* (`sb_publishable_…`) → `SUPABASE_ANON_KEY` and `VITE_SUPABASE_ANON_KEY`
+- *Secret key* (`sb_secret_…`) → `SUPABASE_SERVICE_ROLE_KEY` (backend only — never expose to frontend)
+
+**2. Apply the database migrations.** In the Supabase dashboard SQL Editor, run these files in order:
+
+- `backend/migrations/0001_initial_schema.sql`
+- `backend/migrations/0002_profile_trigger.sql`
+
+Confirm the five tables (`profiles`, `projects`, `pr_analyses`, `bug_reports`, `user_credentials`) appear in the Table Editor with RLS lock icons.
+
+**3. Configure environment:**
 
 ```bash
 git clone https://github.com/<your-org>/qlankr.git
 cd qlankr
 cp .env.example .env
+# fill in the Supabase values from step 1, plus ANTHROPIC_API_KEY and GITHUB_TOKEN
 ```
 
-**2. Fill in `.env`:**
+Note: JWTs are signed with ES256 (asymmetric); no `SUPABASE_JWT_SECRET` is needed — the backend fetches the project's public key from the JWKS endpoint.
 
-```bash
-ANTHROPIC_API_KEY=sk-ant-...
-GITHUB_TOKEN=ghp_...
-VITE_API_URL=http://localhost:8000
-
-# Optional — enables LangSmith tracing
-LANGSMITH_API_KEY=lsv2_pt_...
-LANGSMITH_TRACING=true
-LANGSMITH_ENDPOINT=https://api.smith.langchain.com
-LANGSMITH_PROJECT=qlankr
-```
-
-Third-party integrations (Jira, Notion, Confluence, Grafana, Kibana) are configured at runtime through the Settings UI — no environment variables needed for those.
-
-**3. Start:**
+**4. Start:**
 
 ```bash
 docker compose up
@@ -121,6 +123,8 @@ docker compose up
 
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
+
+Sign up via the frontend, then open **Settings** to add your Anthropic API key, GitHub token, and any integration credentials (Jira, Notion, Grafana, etc.) — these will eventually replace the env-var fallbacks.
 
 ---
 
