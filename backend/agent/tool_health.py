@@ -105,9 +105,9 @@ def _postman_configured() -> bool:
 
 async def _ping(url: str, **kwargs: Any) -> tuple[bool, str]:
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=False) as client:
             r = await client.get(url, **kwargs)
-        if r.status_code < 400:
+        if 200 <= r.status_code < 300:
             return True, f"OK ({r.status_code})"
         return False, f"HTTP {r.status_code}"
     except Exception as e:
@@ -199,12 +199,18 @@ async def check_integration_health(name: str) -> dict:
                 "healthy": False,
                 "message": "CONFLUENCE_URL/TOKEN not set",
             }
-        u = _confluence_url() + "/wiki/rest/api/user/current"
+        u = _confluence_url() + "/rest/api/user/current"
         tok = (
             _credential_session_overrides.get("confluence", {}).get("CONFLUENCE_TOKEN")
             or os.environ.get("CONFLUENCE_TOKEN", "")
         )
-        ok, m = await _ping(u, headers={"Authorization": f"Bearer {tok}"})
+        email = (
+            _credential_session_overrides.get("confluence", {}).get("CONFLUENCE_USERNAME")
+            or os.environ.get("JIRA_EMAIL", "")
+        )
+        import base64 as _b64
+        b64 = _b64.b64encode(f"{email}:{tok}".encode()).decode("ascii")
+        ok, m = await _ping(u, headers={"Authorization": f"Basic {b64}"})
         return {"name": "confluence", "configured": True, "healthy": ok, "message": m}
 
     if name == "grafana":
