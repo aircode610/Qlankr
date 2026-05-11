@@ -328,6 +328,9 @@ async def continue_analysis(session_id: str, req: ContinueRequest, user_id: UUID
     from agent.agent import has_analysis_thread  # noqa: PLC0415
     if not has_analysis_thread(session_id):
         raise HTTPException(status_code=404, detail="Session not found")
+
+    from agent.sessions import persist_pr_analysis_finalize  # noqa: PLC0415
+
     async def generate():
         from agent.agent import continue_agent  # noqa: PLC0415
         user_response = {"action": req.action}
@@ -335,8 +338,29 @@ async def continue_analysis(session_id: str, req: ContinueRequest, user_id: UUID
             user_response["context"] = req.additional_context
             user_response["feedback"] = req.additional_context
             user_response["choice"] = req.additional_context  # for choice_node
-        async for event in continue_agent(session_id, user_response):
-            yield sse_event(event)
+
+        final_result: dict | None = None
+        error_message: str | None = None
+        try:
+            async for event in continue_agent(session_id, user_response):
+                evt_type = getattr(event, "type", None)
+                if evt_type == "result":
+                    final_result = event.model_dump() if hasattr(event, "model_dump") else None
+                elif evt_type == "error":
+                    error_message = getattr(event, "message", "agent emitted error event")
+                yield sse_event(event)
+        except Exception as e:  # noqa: BLE001
+            error_message = error_message or str(e)
+            raise
+        finally:
+            if final_result is not None and not error_message:
+                persist_pr_analysis_finalize(
+                    user_id, session_id, status="completed", final_result=final_result,
+                )
+            elif error_message:
+                persist_pr_analysis_finalize(
+                    user_id, session_id, status="failed", failure_reason=error_message,
+                )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -418,6 +442,8 @@ async def create_bug_report(req: BugReportRequest, user_id: UUID = Depends(get_c
 
 @app.post("/bug-report/{session_id}/continue")
 async def continue_bug_report_ep(session_id: str, req: BugContinueRequest, user_id: UUID = Depends(get_current_user)):
+    from agent.bug_run_registry import persist_bug_run_finalize  # noqa: PLC0415
+
     async def generate():
         from agent.bug_agent import continue_bug_report  # noqa: PLC0415
         user_response: dict[str, Any] = {"action": req.action}
@@ -426,8 +452,37 @@ async def continue_bug_report_ep(session_id: str, req: BugContinueRequest, user_
         if req.additional_context:
             user_response["additional_context"] = req.additional_context
             user_response["context"] = req.additional_context
-        async for event in continue_bug_report(session_id, user_response):
-            yield sse_event(event)
+
+        final_report: dict | None = None
+        severity: str | None = None
+        error_message: str | None = None
+        try:
+            async for event in continue_bug_report(session_id, user_response):
+                evt_type = getattr(event, "type", None)
+                if evt_type == "bug_result":
+                    final_report = event.model_dump() if hasattr(event, "model_dump") else None
+                    try:
+                        report = final_report.get("report") if isinstance(final_report, dict) else None
+                        if isinstance(report, dict):
+                            severity = report.get("severity") or report.get("triage", {}).get("severity")
+                    except Exception:  # noqa: BLE001
+                        severity = None
+                elif evt_type == "error":
+                    error_message = getattr(event, "message", "agent emitted error event")
+                yield sse_event(event)
+        except Exception as e:  # noqa: BLE001
+            error_message = error_message or str(e)
+            raise
+        finally:
+            if final_report is not None and not error_message:
+                persist_bug_run_finalize(
+                    user_id, session_id, status="completed",
+                    final_report=final_report, severity=severity,
+                )
+            elif error_message:
+                persist_bug_run_finalize(
+                    user_id, session_id, status="failed", failure_reason=error_message,
+                )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
