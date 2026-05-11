@@ -19,6 +19,7 @@ describe("ProjectsListPage", () => {
       {
         id: "p1",
         user_id: "u",
+        name: "foo/bar",
         repo_url: "https://github.com/foo/bar",
         owner: "foo",
         repo_name: "bar",

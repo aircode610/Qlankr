@@ -8,12 +8,14 @@ from pydantic import BaseModel, Field
 
 class IndexRequest(BaseModel):
     repo_url: str  # e.g. https://github.com/owner/repo
+    project_id: str | None = None  # if given, attach this URL to the named project
 
 
 class AnalyzeRequest(BaseModel):
     pr_url: str
     context: str | None = None      # optional bug report or user scenario for E2E stage
     session_id: str | None = None   # set when resuming after a checkpoint
+    project_id: str | None = None   # project this analysis belongs to (for history persistence)
 
 
 class ContinueRequest(BaseModel):
@@ -224,6 +226,7 @@ class BugReportRequest(BaseModel):
     jira_ticket: str | None = None
     attachments: list[str] = Field(default_factory=list)
     session_id: str | None = None
+    project_id: str | None = None   # project this bug report belongs to (for history persistence)
 
 
 class BugContinueRequest(BaseModel):

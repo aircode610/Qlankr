@@ -176,7 +176,7 @@ async def test_get_graph_data_returns_live_graph(fake_supabase):
     uid = uuid4()
     # Pre-create a project record so get_graph_data finds it
     from projects import create_project
-    create_project(uid, "https://github.com/owner/repo")
+    create_project(uid, repo_url="https://github.com/owner/repo")
 
     mock_graph = GraphData(
         nodes=[GraphNode(id="n1", label="f.py", type="file", cluster="c")],

@@ -199,10 +199,15 @@ export interface IndexCallbacks {
   onError?: (message: string) => void;
 }
 
-export async function indexRepo(repoUrl: string, opts: IndexCallbacks = {}): Promise<unknown> {
+export async function indexRepo(
+  repoUrl: string,
+  opts: IndexCallbacks & { projectId?: string } = {},
+): Promise<unknown> {
   let finalPayload: unknown = null;
+  const body: Record<string, unknown> = { repo_url: repoUrl };
+  if (opts.projectId) body.project_id = opts.projectId;
   try {
-    await streamSsePost('/index', { repo_url: repoUrl }, {
+    await streamSsePost('/index', body, {
       signal: opts.signal,
       onEvent: (evt) => {
         opts.onEvent?.(evt);
@@ -238,11 +243,12 @@ export async function analyzePR(
   context: string | null = null,
   sessionId: string | null = null,
   workflowType: string | null = null,
-  opts: AnalyzeCallbacks = {},
+  opts: AnalyzeCallbacks & { projectId?: string } = {},
 ): Promise<unknown> {
   const body: Record<string, unknown> = { pr_url: prUrl };
   if (context) body.context = context;
   if (sessionId) body.session_id = sessionId;
+  if (opts.projectId) body.project_id = opts.projectId;
 
   let finalPayload: unknown = null;
   try {
@@ -479,9 +485,10 @@ export async function updateIntegration(
 export type Project = {
   id: string;
   user_id: string;
-  repo_url: string;
-  owner: string;
-  repo_name: string;
+  name: string | null;          // user-given label, set when repo is not attached yet
+  repo_url: string | null;
+  owner: string | null;
+  repo_name: string | null;
   index_status: "pending" | "indexing" | "ready" | "failed" | "stale";
   index_error?: string | null;
   graph_stats?: { node_count?: number; edge_count?: number } | null;
@@ -499,13 +506,23 @@ export async function listProjects(): Promise<Project[]> {
   return r.json();
 }
 
-export async function createProject(repo_url: string): Promise<Project> {
+export async function createProject(body: { name?: string; repo_url?: string }): Promise<Project> {
   const r = await fetch(`${import.meta.env.VITE_API_URL}/projects`, {
     method: "POST",
     headers: { ...(await authHeaders()), "Content-Type": "application/json" },
-    body: JSON.stringify({ repo_url }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`createProject ${r.status}`);
+  return r.json();
+}
+
+export async function attachRepoToProject(projectId: string, repoUrl: string): Promise<Project> {
+  const r = await fetch(`${import.meta.env.VITE_API_URL}/projects/${projectId}/attach`, {
+    method: "POST",
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
+    body: JSON.stringify({ repo_url: repoUrl }),
+  });
+  if (!r.ok) throw new Error(`attachRepoToProject ${r.status}`);
   return r.json();
 }
 

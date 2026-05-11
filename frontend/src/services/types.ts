@@ -156,6 +156,7 @@ export interface BugReportRequest {
   jira_ticket?: string;
   attachments?: string[];
   session_id?: string;
+  project_id?: string;
 }
 
 export interface LogEntry {

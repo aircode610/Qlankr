@@ -27,19 +27,53 @@ def get_project(user_id: UUID, project_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def create_project(user_id: UUID, repo_url: str) -> dict:
+def create_project(
+    user_id: UUID,
+    *,
+    name: str | None = None,
+    repo_url: str | None = None,
+) -> dict:
+    """Create a project. Either `name` (user label, repo attached later) or
+    `repo_url` (immediate indexing-ready project). At least one is required.
+    """
+    if not name and not repo_url:
+        raise ValueError("create_project requires `name` or `repo_url`")
+
+    scoped = user_scoped(user_id)
+    payload: dict = {"index_status": "pending"}
+    if name is not None:
+        payload["name"] = name
+    if repo_url is not None:
+        owner, repo = parse_repo_url(repo_url)
+        # Idempotent on (user_id, repo_url) only when a URL was given.
+        existing = scoped.table("projects").select("*").eq("repo_url", repo_url).execute().data or []
+        if existing:
+            return existing[0]
+        payload["repo_url"] = repo_url
+        payload["owner"] = owner
+        payload["repo_name"] = repo
+        payload.setdefault("name", f"{owner}/{repo}")
+
+    res = scoped.table("projects").insert(payload).execute()
+    return (res.data or [])[0]
+
+
+def attach_repo(user_id: UUID, project_id: str, repo_url: str) -> dict:
+    """Attach a GitHub URL to an existing named project. Sets owner/repo_name/repo_url
+    and resets the index status to 'pending' so the next indexing run kicks off."""
     owner, repo = parse_repo_url(repo_url)
     scoped = user_scoped(user_id)
-    existing = scoped.table("projects").select("*").eq("repo_url", repo_url).execute().data or []
-    if existing:
-        return existing[0]
-    res = scoped.table("projects").insert({
+    scoped.table("projects").update({
         "repo_url": repo_url,
         "owner": owner,
         "repo_name": repo,
         "index_status": "pending",
-    }).execute()
-    return (res.data or [])[0]
+        "index_error": None,
+    }).eq("id", project_id).execute()
+    project = get_project(user_id, project_id)
+    if not project:
+        raise KeyError(project_id)
+    return project
 
 
 def delete_project(user_id: UUID, project_id: str) -> None:

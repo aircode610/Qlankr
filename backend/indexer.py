@@ -59,13 +59,20 @@ def _detect_stage(line: str) -> str:
 # ── Public per-user surface ───────────────────────────────────────────────────
 
 def list_indexed_repos(user_id: UUID) -> list[dict]:
-    """Return all projects for this user from the database."""
-    return list_projects(user_id)
+    """Return projects that finished indexing (have a repo URL + status='ready').
+    Used by the legacy IndexingPage's 'Recent repositories' picker — named-only
+    projects without a URL would crash that UI on click.
+    """
+    return [
+        p for p in list_projects(user_id)
+        if p.get("repo_url") and p.get("owner") and p.get("repo_name")
+        and p.get("index_status") == "ready"
+    ]
 
 
 def register_repo(user_id: UUID, repo_url: str) -> dict:
     """Idempotent: returns existing project record or creates a new one."""
-    return create_project(user_id, repo_url)
+    return create_project(user_id, repo_url=repo_url)
 
 
 def get_kuzu_path(user_id: UUID, owner: str, repo: str):
@@ -110,7 +117,7 @@ async def index_repo(
     clone_path = os.path.join(tmp_dir, repo)
 
     # Create or retrieve the project record
-    project = create_project(user_id, repo_url)
+    project = create_project(user_id, repo_url=repo_url)
     project_id = project["id"]
 
     # Mark as indexing
@@ -138,6 +145,7 @@ async def index_repo(
 
     # ── Analyze ────────────────────────────────────────────────────────────────
     yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze?")
+    indexed_marker_seen = False  # gitnexus emits "Repository indexed successfully" before any post-success crash
     try:
         proc = await asyncio.create_subprocess_exec(
             "gitnexus", "analyze", clone_path, "--embeddings",
@@ -152,13 +160,24 @@ async def index_repo(
                 break
             line = line_bytes.decode().strip()
             if line:
+                if "Repository indexed successfully" in line:
+                    indexed_marker_seen = True
                 yield IndexStepEvent(stage=_detect_stage(line), summary=line)
 
         await proc.wait()
         if proc.returncode != 0:
-            update_status(user_id, project_id, status="failed", error=f"gitnexus analyze exited with code {proc.returncode}")
-            yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
-            return
+            # gitnexus occasionally crashes on shutdown (libc++abi mutex error) AFTER
+            # successfully writing to KuzuDB. If we observed the success marker in the
+            # output, trust it and continue — the data is in the DB.
+            if indexed_marker_seen:
+                yield IndexStepEvent(
+                    stage="analyze",
+                    summary=f"gitnexus exited {proc.returncode} after successful indexing; continuing",
+                )
+            else:
+                update_status(user_id, project_id, status="failed", error=f"gitnexus analyze exited with code {proc.returncode}")
+                yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
+                return
     except FileNotFoundError:
         update_status(user_id, project_id, status="failed", error="gitnexus not found")
         yield ErrorEvent(message="gitnexus not found ? is it installed?")

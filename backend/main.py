@@ -74,6 +74,17 @@ async def health():
 
 @app.post("/index")
 async def index(request: IndexRequest, user_id: UUID = Depends(get_current_user)):
+    print(f"[INDEX] user={user_id} project_id={request.project_id!r} repo_url={request.repo_url!r}", flush=True)
+    if request.project_id:
+        from projects import attach_repo  # noqa: PLC0415
+        try:
+            attached = attach_repo(user_id, request.project_id, request.repo_url)
+            print(f"[INDEX] attach_repo returned: id={attached['id']} owner={attached.get('owner')} repo_name={attached.get('repo_name')} repo_url={attached.get('repo_url')}", flush=True)
+        except (ValueError, KeyError) as e:
+            print(f"[INDEX] attach_repo FAILED: {e}", flush=True)
+            raise HTTPException(status_code=400, detail=str(e))
+    else:
+        print("[INDEX] WARNING called without project_id", flush=True)
     return StreamingResponse(
         stream_response(index_repo(user_id, request.repo_url)),
         media_type="text/event-stream",
@@ -94,6 +105,11 @@ async def graph(owner: str, repo: str, user_id: UUID = Depends(get_current_user)
 # ── Projects CRUD ─────────────────────────────────────────────────────────────
 
 class CreateProjectBody(BaseModel):
+    name: str | None = None
+    repo_url: str | None = None
+
+
+class AttachRepoBody(BaseModel):
     repo_url: str
 
 
@@ -105,9 +121,21 @@ async def get_projects(user_id: UUID = Depends(get_current_user)):
 @app.post("/projects", status_code=201)
 async def post_project(body: CreateProjectBody, user_id: UUID = Depends(get_current_user)):
     try:
-        return create_project(user_id, body.repo_url)
+        return create_project(user_id, name=body.name, repo_url=body.repo_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/projects/{project_id}/attach")
+async def post_attach_repo(project_id: str, body: AttachRepoBody, user_id: UUID = Depends(get_current_user)):
+    from projects import attach_repo  # noqa: PLC0415
+
+    try:
+        return attach_repo(user_id, project_id, body.repo_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="project not found")
 
 
 @app.get("/projects/{project_id}")
@@ -115,7 +143,10 @@ async def get_project_detail(project_id: str, user_id: UUID = Depends(get_curren
     project = get_project(user_id, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="not found")
-    local_graph_present = graph_dir(user_id, project["owner"], project["repo_name"]).is_dir()
+    local_graph_present = (
+        bool(project.get("owner")) and bool(project.get("repo_name"))
+        and graph_dir(user_id, project["owner"], project["repo_name"]).is_dir()
+    )
     return {**project, "local_graph_present": local_graph_present}
 
 
@@ -125,9 +156,10 @@ async def delete_project_endpoint(project_id: str, user_id: UUID = Depends(get_c
     if not project:
         raise HTTPException(status_code=404, detail="not found")
     delete_project(user_id, project_id)
-    path = graph_dir(user_id, project["owner"], project["repo_name"])
-    if path.is_dir():
-        shutil.rmtree(path)
+    if project.get("owner") and project.get("repo_name"):
+        path = graph_dir(user_id, project["owner"], project["repo_name"])
+        if path.is_dir():
+            shutil.rmtree(path)
     return None
 
 
@@ -233,14 +265,60 @@ async def file_content(owner: str, repo: str, path: str, user_id: UUID = Depends
 
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest, user_id: UUID = Depends(get_current_user)):
+    from uuid import uuid4 as _uuid4  # noqa: PLC0415
+    from agent.sessions import persist_pr_analysis_start, persist_pr_analysis_finalize  # noqa: PLC0415
+
+    # Generate the session_id up front so we can use it for history persistence.
+    # If the client passed one (e.g. resuming after a checkpoint), reuse it.
+    session_id = req.session_id or str(_uuid4())
+
+    # Persist run start if we have a project to attach it to.
+    if req.project_id:
+        pr_number: int | None = None
+        # Try to extract PR number from common URL patterns.
+        try:
+            from urllib.parse import urlparse  # noqa: PLC0415
+            parts = urlparse(req.pr_url).path.rstrip("/").split("/")
+            if "pull" in parts:
+                idx = parts.index("pull")
+                pr_number = int(parts[idx + 1])
+        except (ValueError, IndexError):
+            pr_number = None
+        persist_pr_analysis_start(
+            user_id, session_id, req.project_id, req.pr_url,
+            pr_number=pr_number, pr_title=None,
+        )
+
     async def generate():
         from agent.agent import run_agent  # noqa: PLC0415
-        async for event in run_agent(
-            req.pr_url,
-            context=req.context,
-            session_id=req.session_id,
-        ):
-            yield sse_event(event)
+        final_result: dict | None = None
+        error_message: str | None = None
+        try:
+            async for event in run_agent(
+                req.pr_url,
+                context=req.context,
+                session_id=session_id,
+            ):
+                # Capture terminal payloads so we can persist them on finalization.
+                evt_type = getattr(event, "type", None)
+                if evt_type == "result":
+                    final_result = event.model_dump() if hasattr(event, "model_dump") else None
+                elif evt_type == "error":
+                    error_message = getattr(event, "message", "agent emitted error event")
+                yield sse_event(event)
+        except Exception as e:  # noqa: BLE001
+            error_message = error_message or str(e)
+            raise
+        finally:
+            if req.project_id:
+                if final_result is not None and not error_message:
+                    persist_pr_analysis_finalize(
+                        user_id, session_id, status="completed", final_result=final_result,
+                    )
+                elif error_message:
+                    persist_pr_analysis_finalize(
+                        user_id, session_id, status="failed", failure_reason=error_message,
+                    )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -276,17 +354,64 @@ async def analyze_session_status(session_id: str, user_id: UUID = Depends(get_cu
 
 @app.post("/bug-report")
 async def create_bug_report(req: BugReportRequest, user_id: UUID = Depends(get_current_user)):
+    from agent.bug_run_registry import persist_bug_run_start, persist_bug_run_finalize  # noqa: PLC0415
+
     async def generate():
         from agent.bug_agent import run_bug_report  # noqa: PLC0415
-        async for event in run_bug_report(
-            description=req.description,
-            environment=req.environment,
-            severity=req.severity,
-            repo_url=req.repo_url,
-            jira_ticket=req.jira_ticket,
-            attachments=req.attachments,
-        ):
-            yield sse_event(event)
+
+        # run_bug_report generates its own session_id internally; capture from the
+        # first event that carries one so we can persist with the same id.
+        captured_session_id: str | None = None
+        persisted_start = False
+        final_report: dict | None = None
+        severity: str | None = None
+        error_message: str | None = None
+
+        try:
+            async for event in run_bug_report(
+                description=req.description,
+                environment=req.environment,
+                severity=req.severity,
+                repo_url=req.repo_url,
+                jira_ticket=req.jira_ticket,
+                attachments=req.attachments,
+            ):
+                # Pluck session_id off any event that exposes it.
+                if captured_session_id is None:
+                    sid = getattr(event, "session_id", None)
+                    if isinstance(sid, str) and sid:
+                        captured_session_id = sid
+                        if req.project_id and not persisted_start:
+                            persist_bug_run_start(user_id, captured_session_id, req.project_id, req.description)
+                            persisted_start = True
+
+                evt_type = getattr(event, "type", None)
+                if evt_type == "bug_result":
+                    final_report = event.model_dump() if hasattr(event, "model_dump") else None
+                    try:
+                        report = final_report.get("report") if isinstance(final_report, dict) else None
+                        if isinstance(report, dict):
+                            severity = report.get("severity") or report.get("triage", {}).get("severity")
+                    except Exception:  # noqa: BLE001
+                        severity = None
+                elif evt_type == "error":
+                    error_message = getattr(event, "message", "agent emitted error event")
+
+                yield sse_event(event)
+        except Exception as e:  # noqa: BLE001
+            error_message = error_message or str(e)
+            raise
+        finally:
+            if req.project_id and captured_session_id:
+                if final_report is not None and not error_message:
+                    persist_bug_run_finalize(
+                        user_id, captured_session_id, status="completed",
+                        final_report=final_report, severity=severity,
+                    )
+                elif error_message:
+                    persist_bug_run_finalize(
+                        user_id, captured_session_id, status="failed", failure_reason=error_message,
+                    )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

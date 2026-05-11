@@ -25,6 +25,12 @@ interface AppStateContextValue {
   currentProject: ProjectDetail | null;
   setCurrentProject: (p: ProjectDetail | null) => void;
 
+  // Backward-compat shim for LegacyApp.tsx. repoUrl is derived from
+  // currentProject; setRepoUrl is a no-op because the project is now
+  // selected via routing (/projects/:id), not by mutating state.
+  repoUrl: string | null;
+  setRepoUrl: (url: string | null) => void;
+
   // Repo indexing
   indexing: boolean;
   setIndexing: (v: boolean) => void;
@@ -82,6 +88,8 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
     () => ({
       ...graphState,
       currentProject, setCurrentProject,
+      repoUrl: currentProject?.repo_url ?? null,
+      setRepoUrl: () => { /* no-op: project is selected via routing now */ },
       indexing, setIndexing,
       indexed, setIndexed,
       indexMessages, setIndexMessages,

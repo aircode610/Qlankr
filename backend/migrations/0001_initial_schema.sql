@@ -3,6 +3,16 @@
 
 create extension if not exists pgcrypto;
 
+-- Grant table privileges to the backend's service_role.
+-- Required when the project's "Automatically expose new tables" setting is OFF.
+grant usage on schema public to service_role;
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+alter default privileges in schema public
+  grant all on tables to service_role;
+alter default privileges in schema public
+  grant all on sequences to service_role;
+
 -- profiles
 create table profiles (
   id uuid primary key references auth.users(id) on delete cascade,

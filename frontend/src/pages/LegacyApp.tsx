@@ -1,4 +1,5 @@
 import { useRef, useCallback, useState, useEffect, Component, ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import { AppStateProvider, useAppState } from '../hooks/useAppState';
 import { GraphCanvas, GraphCanvasHandle } from '../components/GraphCanvas';
 import { FileTreePanel } from '../components/FileTreePanel';
@@ -19,7 +20,7 @@ import { BugReportView } from '../components/BugReportView';
 import { BugCheckpointDialog } from '../components/BugCheckpointDialog';
 import { ResearchPanel } from '../components/ResearchPanel';
 import { createKnowledgeGraph } from '../core/graph/graph';
-import { indexRepo, analyzePR, continueAnalysis, getGraph, startBugReport, continueBugReport } from '../services/api';
+import { indexRepo, analyzePR, continueAnalysis, getGraph, getProject, startBugReport, continueBugReport, type ProjectDetail } from '../services/api';
 import type { AnalysisStage, CheckpointData, AnalyzeResult, BugReport, BugCheckpointEvent } from '../services/types';
 
 // ── Error boundary ────────────────────────────────────────────────────────────
@@ -75,9 +76,13 @@ type AnalyzeMode = 'idle' | 'running' | 'checkpoint' | 'done' | 'error';
 
 // ── Main app content ──────────────────────────────────────────────────────────
 const AppContent = () => {
+  // Read project id directly from the route — guaranteed to be available the
+  // moment LegacyApp renders, no async hydration race like useAppState().currentProject.
+  const { id: routeProjectId } = useParams<{ id: string }>();
   const {
     graph, setGraph,
     repoUrl, setRepoUrl,
+    currentProject,
     indexing, setIndexing,
     indexed, setIndexed,
     indexMessages, setIndexMessages,
@@ -90,7 +95,26 @@ const AppContent = () => {
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Local copy of the project data — fetched directly from the route id so we
+  // don't depend on the context currentProject, which has been observed null
+  // mid-session despite ProjectDetailLayout gating on it.
+  const [routeProject, setRouteProject] = useState<ProjectDetail | null>(null);
+  useEffect(() => {
+    if (!routeProjectId) return;
+    let cancelled = false;
+    getProject(routeProjectId)
+      .then((p) => { if (!cancelled) setRouteProject(p); })
+      .catch(() => { if (!cancelled) setRouteProject(null); });
+    return () => { cancelled = true; };
+  }, [routeProjectId]);
+
+  // Show the workspace immediately if the graph is already loaded (e.g. when
+  // returning to the project after navigating away to History). After a fresh
+  // index, the useEffect below flips it on ~900ms after `indexed` becomes true.
   const [showWorkspace, setShowWorkspace] = useState(false);
+  useEffect(() => {
+    if (indexed) setShowWorkspace(true);
+  }, [indexed]);
   const [view, setView] = useState<AppView>('graph');
   const [indexError, setIndexError] = useState<string | null>(null);
 
@@ -238,7 +262,12 @@ const AppContent = () => {
     setProgress({ phase: 'extracting', percent: 0, message: 'Indexing repository...' });
 
     try {
+      console.log("[Qlankr] handleIndex calling indexRepo", {
+        url,
+        projectId: routeProjectId,
+      });
       await indexRepo(url, {
+        projectId: routeProjectId,
         onIndexStep: (data) => {
           setIndexMessages((prev) => [...prev, { stage: data.stage, summary: data.summary }]);
         },
@@ -268,7 +297,16 @@ const AppContent = () => {
     } finally {
       setIndexing(false);
     }
-  }, [setRepoUrl, setIndexing, setIndexMessages, setProgress, setIndexed, setGraph]);
+  }, [setRepoUrl, setIndexing, setIndexMessages, setProgress, setIndexed, setGraph, routeProjectId]);
+
+  /* ── Auto-load cached graph when project has an attached repo ─── */
+  useEffect(() => {
+    if (!routeProject) return;
+    if (!routeProject.owner || !routeProject.repo_name) return;
+    if (routeProject.index_status === 'failed') return;
+    if (indexed) return; // already loaded in this session
+    void handleOpenCached(`${routeProject.owner}/${routeProject.repo_name}`);
+  }, [routeProject, indexed, handleOpenCached]);
 
   /* ── PR analysis ────────────────────────────────────────────── */
   const handleAnalyze = useCallback(async (prUrl: string, context: string | null) => {
@@ -295,6 +333,7 @@ const AppContent = () => {
 
     try {
       await analyzePR(prUrl, context, null, null, {
+        projectId: routeProjectId,
         signal: abortRef.current.signal,
         onAgentStep: (data) => {
           setAnalysisState((prev) => ({
@@ -433,7 +472,9 @@ const AppContent = () => {
     };
 
     try {
-      await startBugReport(req, {
+      // Inject the project id so backend can persist this run into history.
+      const reqWithProject = { ...req, project_id: req.project_id ?? routeProjectId };
+      await startBugReport(reqWithProject, {
         signal: bugAbortRef.current.signal,
         onBugStageChange: (d) => updateStage(d.stage, 'running'),
         onEvent: (evt) => {
@@ -575,6 +616,7 @@ const AppContent = () => {
         indexed={indexed}
         indexMessages={indexMessages}
         error={indexError}
+        hideCachedPicker
       />
     );
   }
