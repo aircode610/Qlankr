@@ -67,4 +67,6 @@ export {
   Info,
   Minus,
   Plus,
+  Sun,
+  Moon,
 } from 'lucide-react';

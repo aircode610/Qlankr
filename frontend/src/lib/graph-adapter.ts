@@ -145,13 +145,11 @@ export const knowledgeGraphToGraphology = (
 
     nodePositions.set(nodeId, { x, y });
     const hasCommunity = communityIndex !== undefined;
-    const usesCommunityColor = hasCommunity && symbolTypes.has(node.label);
-    const nodeColor = usesCommunityColor ? getCommunityColor(communityIndex!) : NODE_COLORS[node.label] || '#9ca3af';
 
     graph.addNode(nodeId, {
       x, y,
       size: getScaledNodeSize(NODE_SIZES[node.label] || 8, nodeCount),
-      color: nodeColor,
+      color: NODE_COLORS[node.label] || '#9ca3af',
       label: node.properties.name,
       nodeType: node.label,
       filePath: node.properties.filePath,

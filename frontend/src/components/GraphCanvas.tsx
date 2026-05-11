@@ -2,6 +2,7 @@ import { useEffect, useCallback, useMemo, useState, forwardRef, useImperativeHan
 import { ZoomIn, ZoomOut, Maximize2, Focus, RotateCcw, Play, Pause } from '@/lib/lucide-icons';
 import { useSigma } from '../hooks/useSigma';
 import { useAppState } from '../hooks/useAppState';
+import { useTheme } from '../hooks/useTheme';
 import { knowledgeGraphToGraphology, filterGraphByDepth, SigmaNodeAttributes, SigmaEdgeAttributes } from '../lib/graph-adapter';
 import type { GraphNode } from 'qlankr-shared';
 import Graph from 'graphology';
@@ -17,6 +18,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     highlightedNodeIds, affectedFileIds,
   } = useAppState();
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
+  const { theme } = useTheme();
 
   const nodeById = useMemo(() => {
     if (!graph) return new Map<string, GraphNode>();
@@ -49,6 +51,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     highlightedNodeIds,
     affectedFileIds,
     visibleEdgeTypes,
+    theme,
   });
 
   useImperativeHandle(ref, () => ({
@@ -106,10 +109,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   return (
     <div className="relative h-full w-full bg-void">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0" style={{
-          background: `radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.03) 0%, transparent 70%),
-            linear-gradient(to bottom, #06060a, #0a0a10)`,
-        }} />
+        <div
+          className="absolute inset-0"
+          style={{
+            background: theme === 'light'
+              ? 'radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.05) 0%, transparent 70%), linear-gradient(to bottom, #f0f2f5, #e8eaef)'
+              : 'radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.03) 0%, transparent 70%), linear-gradient(to bottom, #06060a, #0a0a10)',
+          }}
+        />
       </div>
 
       <div ref={containerRef} className="sigma-container h-full w-full cursor-grab active:cursor-grabbing" />
