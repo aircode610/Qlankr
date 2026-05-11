@@ -231,54 +231,61 @@ async def get_graph_data(user_id: UUID, owner: str, repo: str) -> GraphData:
 async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
     """
     Use GitNexus MCP tools to fetch stats and graph data.
-    Uses the client as an async context manager to ensure server connections are live.
+    Opens a single persistent GitNexus session for all tool calls to avoid
+    spawning a new server process for each cypher/list_repos invocation.
     """
-    from agent.tools import get_mcp_client  # noqa: PLC0415
+    from contextlib import AsyncExitStack  # noqa: PLC0415
+    from agent.tools import get_gitnexus_client, open_persistent_mcp_sessions  # noqa: PLC0415
 
     stats: dict = {}
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
     clusters: list[GraphCluster] = []
 
+    gitnexus_client = get_gitnexus_client()
+    if gitnexus_client is None:
+        print("[indexer] gitnexus not available — graph will be empty", flush=True)
+        return stats, GraphData(nodes=nodes, edges=edges, clusters=clusters)
+
     try:
-        client = get_mcp_client()
-        tools_list = await client.get_tools()
-        tool_map = {t.name: t for t in tools_list}
-        print(f"[indexer] MCP tools available: {sorted(tool_map)}", flush=True)
+        async with AsyncExitStack() as stack:
+            tools_list = await open_persistent_mcp_sessions(gitnexus_client, stack)
+            tool_map = {t.name: t for t in tools_list}
+            print(f"[indexer] MCP tools available: {sorted(tool_map)}", flush=True)
 
-        # ── Stats via list_repos ───────────────────────────────────────────
-        if "list_repos" in tool_map:
-            try:
-                raw = await tool_map["list_repos"].ainvoke({})
-                for r in _to_records(raw):
-                    rname = r.get("name", "")
-                    rpath = r.get("path", "")
-                    if rname == repo_name or rpath.endswith(f"/{repo_name}"):
-                        s = r.get("stats", {})
-                        if isinstance(s, dict):
-                            stats = {
-                                "files": int(s.get("files", 0)),
-                                "nodes": int(s.get("nodes", 0)),
-                                "edges": int(s.get("edges", 0)),
-                                "communities": int(s.get("communities", 0)),
-                                "processes": int(s.get("processes", 0)),
-                            }
-                        break
-                print(f"[indexer] stats for {repo_name}: {stats}", flush=True)
-            except Exception as e:
-                print(f"[indexer] list_repos error: {e}", flush=True)
+            # ── Stats via list_repos ───────────────────────────────────────────
+            if "list_repos" in tool_map:
+                try:
+                    raw = await tool_map["list_repos"].ainvoke({})
+                    for r in _to_records(raw):
+                        rname = r.get("name", "")
+                        rpath = r.get("path", "")
+                        if rname == repo_name or rpath.endswith(f"/{repo_name}"):
+                            s = r.get("stats", {})
+                            if isinstance(s, dict):
+                                stats = {
+                                    "files": int(s.get("files", 0)),
+                                    "nodes": int(s.get("nodes", 0)),
+                                    "edges": int(s.get("edges", 0)),
+                                    "communities": int(s.get("communities", 0)),
+                                    "processes": int(s.get("processes", 0)),
+                                }
+                            break
+                    print(f"[indexer] stats for {repo_name}: {stats}", flush=True)
+                except Exception as e:
+                    print(f"[indexer] list_repos error: {e}", flush=True)
 
-        # ── Graph data via cypher ─────────────────────────────────────────
-        if "cypher" in tool_map:
-            cypher = tool_map["cypher"]
-            nodes, clusters = await _cypher_nodes(cypher, repo_name)
-            edges = await _cypher_edges(cypher, repo_name)
-            print(
-                f"[indexer] graph: {len(nodes)} nodes, {len(edges)} edges, {len(clusters)} clusters",
-                flush=True,
-            )
-        else:
-            print("[indexer] cypher tool not found — graph will be empty", flush=True)
+            # ── Graph data via cypher ─────────────────────────────────────────
+            if "cypher" in tool_map:
+                cypher = tool_map["cypher"]
+                nodes, clusters = await _cypher_nodes(cypher, repo_name)
+                edges = await _cypher_edges(cypher, repo_name)
+                print(
+                    f"[indexer] graph: {len(nodes)} nodes, {len(edges)} edges, {len(clusters)} clusters",
+                    flush=True,
+                )
+            else:
+                print("[indexer] cypher tool not found — graph will be empty", flush=True)
 
     except Exception as e:
         print(f"[indexer] _fetch_stats_and_graph error: {e}", flush=True)

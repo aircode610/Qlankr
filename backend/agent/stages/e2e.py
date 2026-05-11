@@ -49,9 +49,11 @@ class _E2EOutput(BaseModel):
     e2e_test_plans: list[_E2ETestPlan] = Field(min_length=1)
 
 
-async def run_e2e(state: "AnalysisState", llm: Any) -> dict:
-    client = get_mcp_client()
-    all_tools = await client.get_tools()
+async def run_e2e(state: "AnalysisState", llm: Any, all_tools: list | None = None) -> dict:
+    if all_tools is None:
+        print("[e2e] starting MCP client (no pre-fetched tools)...", flush=True)
+        client = get_mcp_client()
+        all_tools = await client.get_tools()
     stage_tools = safe_tools(filter_tools(all_tools, "e2e"))
 
     repo_name = state.get("repo_name")

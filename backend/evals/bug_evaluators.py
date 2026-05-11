@@ -9,8 +9,23 @@ Each evaluator returns:
     "details": list of {"check", "passed", "value"} — one entry per check
   }
 
-Person 1 owns: triage_accuracy, mechanics_grounding, reproduction_executability
+Deterministic evaluators (no LLM cost, run always):
+  Person 1 — stages 1-3: triage_accuracy, mechanics_grounding, reproduction_executability
+  Person 2 — stages 4-5: bug_pipeline_health, research_coverage, report_completeness,
+                          report_actionability, evidence_quality, tool_efficiency,
+                          graceful_degradation
+
+LLM-as-judge evaluators (async, require ANTHROPIC_API_KEY):
+  root_cause_quality       — does the report root cause match expected keywords?
+  report_coherence         — is the report specific, internally consistent, grounded?
+  reproduction_step_clarity — are the steps genuinely executable by a developer?
 """
+
+import json
+import os
+import re
+
+from langchain_anthropic import ChatAnthropic
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Person 1 evaluators — stages 1-3
@@ -447,3 +462,223 @@ def graceful_degradation(outputs: dict) -> dict:
         comment = "report produced but external sources had results — degradation not fully tested"
 
     return {"key": "graceful_degradation", "score": score, "comment": comment, "details": details}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# LLM-AS-JUDGE EVALUATORS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_judge = ChatAnthropic(
+    model="claude-sonnet-4-6",
+    temperature=0,
+    max_tokens=512,
+    api_key=os.environ.get("ANTHROPIC_API_KEY"),
+)
+
+
+def _parse_judge_response(content: str) -> dict:
+    """Extract JSON score block from judge response.
+
+    Tries three strategies in order:
+      1. Direct parse (model returned bare JSON).
+      2. Extract from a fenced code block (```json ... ```).
+      3. Regex scan for the first {...} object in the text.
+    Falls back to score=0.5 only if all three fail.
+    """
+    text = content.strip()
+
+    # Strategy 1: bare JSON
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Strategy 2: fenced code block
+    try:
+        fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fence:
+            return json.loads(fence.group(1))
+    except Exception:
+        pass
+
+    # Strategy 3: first JSON object anywhere in the text
+    try:
+        obj = re.search(r"\{[^{}]*\}", text, re.DOTALL)
+        if obj:
+            return json.loads(obj.group(0))
+    except Exception:
+        pass
+
+    return {"score": 0.5, "reasoning": "Could not parse judge response"}
+
+
+async def root_cause_quality(inputs: dict, outputs: dict, reference_outputs: dict = None) -> dict:
+    """LLM judge: does the final report's root cause capture the real underlying cause?
+
+    When reference_outputs contains expected_root_cause_keywords, the judge checks
+    semantic alignment with those keywords. Without a reference it evaluates whether
+    the root cause is specific, mechanistic, and non-generic.
+    """
+    report = outputs.get("bug_report", {})
+    root_cause = report.get("root_cause", "")
+    if not root_cause:
+        return {"key": "root_cause_quality", "score": 0.0, "comment": "root_cause field missing"}
+
+    description = inputs.get("description", "")
+    keywords = (reference_outputs or {}).get("expected_root_cause_keywords", [])
+
+    if keywords:
+        reference_section = f"""
+Expected root cause keywords (from human review — any subset counts):
+{json.dumps(keywords, indent=2)}
+
+Score based on semantic alignment:
+- 1.0 = agent's root cause covers the same underlying mechanism as the keywords
+- 0.5 = partially correct — hits some keywords but misses key steps
+- 0.2 = describes symptoms rather than the mechanism
+- 0.0 = wrong component, wrong mechanism, or hallucinated
+"""
+    else:
+        reference_section = """
+No golden reference is available. Score based on quality alone:
+- 1.0 = specific, mechanistic, names exact code paths or invariants violated
+- 0.8 = mostly specific, minor vagueness
+- 0.4 = describes symptoms or general area without identifying the true cause
+- 0.0 = generic ("null pointer", "logic error") or contradicted by the description
+"""
+
+    prompt = f"""You are a QA engineering expert evaluating an AI-generated bug report.
+
+Bug description submitted by user:
+{description}
+
+Agent's root cause analysis:
+{root_cause}
+{reference_section}
+Return ONLY a JSON object: {{"score": <float 0.0-1.0>, "reasoning": "<1-2 sentences>"}}"""
+
+    response = await _judge.ainvoke([{"role": "user", "content": prompt}])
+    result = _parse_judge_response(response.content)
+    return {
+        "key": "root_cause_quality",
+        "score": result.get("score", 0.5),
+        "comment": result.get("reasoning", ""),
+    }
+
+
+async def report_coherence(inputs: dict, outputs: dict) -> dict:
+    """LLM judge: is the final bug report internally consistent, specific, and well-grounded?
+
+    No reference output needed — scores the logical quality of the report given the
+    original bug description. Penalises generic advice, contradictions, and off-topic
+    components.
+    """
+    report = outputs.get("bug_report", {})
+    if not report:
+        return {"key": "report_coherence", "score": 0.0, "comment": "bug_report missing"}
+
+    description = inputs.get("description", "")
+
+    report_summary = {
+        "title": report.get("title", ""),
+        "severity": report.get("severity", ""),
+        "root_cause": report.get("root_cause", ""),
+        "affected_components": [
+            c if isinstance(c, str) else c.get("component", str(c))
+            for c in report.get("affected_components", [])
+        ],
+        "recommendations": report.get("recommendations", []),
+        "confidence": report.get("confidence", ""),
+    }
+
+    prompt = f"""You are a QA engineering expert reviewing an AI-generated bug report for internal consistency and quality.
+
+Original bug description:
+{description}
+
+Generated bug report (key fields):
+{json.dumps(report_summary, indent=2, default=str)}
+
+Evaluate:
+1. Internal consistency — do severity, root cause, affected components, and recommendations all point to the same underlying problem?
+2. Specificity — does the report name real code-level things (files, classes, functions, invariants), or is it vague?
+3. Groundedness — are the recommendations actionable for this specific bug, not generic advice?
+4. Scope — are affected components actually relevant to the reported symptoms?
+
+Score 0.0 to 1.0:
+- 1.0 = fully coherent, specific, well-scoped
+- 0.7 = mostly coherent with minor inconsistencies or vague sections
+- 0.3 = some contradictions or significant vagueness
+- 0.0 = incoherent, contradictory, or entirely generic
+
+Return ONLY: {{"score": <float 0.0-1.0>, "reasoning": "<1-2 sentences>"}}"""
+
+    response = await _judge.ainvoke([{"role": "user", "content": prompt}])
+    result = _parse_judge_response(response.content)
+    return {
+        "key": "report_coherence",
+        "score": result.get("score", 0.5),
+        "comment": result.get("reasoning", ""),
+    }
+
+
+async def reproduction_step_clarity(inputs: dict, outputs: dict) -> dict:
+    """LLM judge: are the reproduction steps genuinely executable by a developer?
+
+    Deterministic checks count steps and verify field presence, but cannot tell
+    whether the actions make sense or are specific enough to follow. This judge
+    fills that gap.
+    """
+    report = outputs.get("bug_report", {})
+    if not report:
+        return {"key": "reproduction_step_clarity", "score": 0.0, "comment": "bug_report missing"}
+
+    steps = report.get("reproduction_steps", [])
+    if not steps:
+        return {"key": "reproduction_step_clarity", "score": 0.0, "comment": "reproduction_steps empty"}
+
+    description = inputs.get("description", "")
+    environment = inputs.get("environment", "unspecified")
+
+    steps_display = []
+    for s in steps:
+        if isinstance(s, dict):
+            steps_display.append({
+                "step": s.get("step", s.get("step_number", "?")),
+                "action": s.get("action", ""),
+                "expected": s.get("expected", s.get("expected_result", "")),
+            })
+        else:
+            steps_display.append(str(s))
+
+    prompt = f"""You are a QA engineer evaluating whether these reproduction steps are genuinely executable.
+
+Bug description:
+{description}
+
+Environment: {environment}
+
+Reproduction steps from the bug report:
+{json.dumps(steps_display, indent=2, default=str)}
+
+Evaluate:
+1. Clarity — could a developer unfamiliar with the codebase follow each step?
+2. Specificity — are actions concrete (specific menu names, settings, actions) or vague ("open the thing")?
+3. Correctness — do the steps plausibly lead to the described symptom?
+4. Completeness — are necessary prerequisites and expected outcomes stated?
+
+Score 0.0 to 1.0:
+- 1.0 = steps are clear, specific, correct, and immediately usable
+- 0.8 = mostly followable but some steps need clarification
+- 0.4 = steps are vague or partially incorrect — would require guesswork
+- 0.0 = steps cannot be followed, are wrong, or are missing entirely
+
+Return ONLY: {{"score": <float 0.0-1.0>, "reasoning": "<1-2 sentences>"}}"""
+
+    response = await _judge.ainvoke([{"role": "user", "content": prompt}])
+    result = _parse_judge_response(response.content)
+    return {
+        "key": "reproduction_step_clarity",
+        "score": result.get("score", 0.5),
+        "comment": result.get("reasoning", ""),
+    }

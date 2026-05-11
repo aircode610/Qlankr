@@ -193,9 +193,10 @@ def _unwrap(raw) -> Any:
 @app.get("/debug/mcp/tools")
 async def debug_mcp_tools(user_id: UUID = Depends(get_current_user)):
     """List all MCP tools the backend can see."""
-    from agent.tools import get_mcp_client
-    client = get_mcp_client()
-    tools = await client.get_tools()
+    from contextlib import AsyncExitStack
+    from agent.tools import get_mcp_client, open_persistent_mcp_sessions, _normalize_tool_names
+    async with AsyncExitStack() as stack:
+        tools = _normalize_tool_names(await open_persistent_mcp_sessions(get_mcp_client(), stack))
     return {
         "count": len(tools),
         "tools": [
@@ -208,29 +209,31 @@ async def debug_mcp_tools(user_id: UUID = Depends(get_current_user)):
 @app.get("/debug/mcp/repos")
 async def debug_mcp_repos(user_id: UUID = Depends(get_current_user)):
     """Call list_repos and return the raw parsed response."""
-    from agent.tools import get_mcp_client
-    client = get_mcp_client()
-    tools = await client.get_tools()
-    tool_map = {t.name: t for t in tools}
-    if "list_repos" not in tool_map:
-        raise HTTPException(status_code=404, detail="list_repos tool not found")
-    raw = await tool_map["list_repos"].ainvoke({})
+    from contextlib import AsyncExitStack
+    from agent.tools import get_mcp_client, open_persistent_mcp_sessions, _normalize_tool_names
+    async with AsyncExitStack() as stack:
+        tools = _normalize_tool_names(await open_persistent_mcp_sessions(get_mcp_client(), stack))
+        tool_map = {t.name: t for t in tools}
+        if "list_repos" not in tool_map:
+            raise HTTPException(status_code=404, detail="list_repos tool not found")
+        raw = await tool_map["list_repos"].ainvoke({})
     return {"raw": _unwrap(raw)}
 
 
 @app.post("/debug/mcp/call")
 async def debug_mcp_call(req: _DebugCallRequest, user_id: UUID = Depends(get_current_user)):
     """Call any MCP tool with arbitrary args and return the raw response."""
-    from agent.tools import get_mcp_client
-    client = get_mcp_client()
-    tools = await client.get_tools()
-    tool_map = {t.name: t for t in tools}
-    if req.tool not in tool_map:
-        raise HTTPException(
-            status_code=404,
-            detail=f"tool {req.tool!r} not found ? available: {sorted(tool_map)}",
-        )
-    raw = await tool_map[req.tool].ainvoke(req.args)
+    from contextlib import AsyncExitStack
+    from agent.tools import get_mcp_client, open_persistent_mcp_sessions, _normalize_tool_names
+    async with AsyncExitStack() as stack:
+        tools = _normalize_tool_names(await open_persistent_mcp_sessions(get_mcp_client(), stack))
+        tool_map = {t.name: t for t in tools}
+        if req.tool not in tool_map:
+            raise HTTPException(
+                status_code=404,
+                detail=f"tool {req.tool!r} not found ? available: {sorted(tool_map)}",
+            )
+        raw = await tool_map[req.tool].ainvoke(req.args)
     return {"tool": req.tool, "args": req.args, "result": _unwrap(raw)}
 
 

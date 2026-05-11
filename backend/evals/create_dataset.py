@@ -298,7 +298,7 @@ GITHUB_ONLY_EXAMPLES = [
 # files, and components so evaluators can measure pipeline accuracy.
 
 BUG_EXAMPLES = [
-    # ── OpenTTD: UI crash — timetable widget layout assertion ─────────────────
+    # ── 1 ── OpenTTD: UI crash — timetable widget layout assertion ────────────
     {
         "_category": "UI crash — widget layout assertion",
         "inputs": {
@@ -334,6 +334,198 @@ BUG_EXAMPLES = [
             "expected_severity": "high",
             "expected_category": "crash",
             "min_reproduction_steps": 3,
+        },
+    },
+
+    # ── 2 ── osu! — Editor: collection mutation during enumeration ────────────
+    # Real issue: https://github.com/ppy/osu/issues/18527
+    {
+        "_category": "editor crash — collection mutation during enumeration",
+        "inputs": {
+            "description": (
+                "In the osu!(lazer) beatmap editor, opening the Timing screen "
+                "and attempting to add a new control point crashes the game to "
+                "desktop with an unhandled System.InvalidOperationException: "
+                "'Collection was modified; enumeration operation may not execute.' "
+                "The crash originates in TimingScreen.ControlPointList.addNew() "
+                "at TimingScreen.cs line 194 inside a List<T>.Enumerator.MoveNext() "
+                "call. Steps: (1) Open any beatmap in the editor. "
+                "(2) Navigate to the Timing screen. "
+                "(3) Select the first timing point in the list. "
+                "(4) Select any effect control point. "
+                "(5) Click the Add button. Game crashes immediately."
+            ),
+            "environment": "osu!lazer 5adbf85 (2022-06-02), Linux/Windows",
+            "severity_input": "medium",
+            "repo_name": "ppy/osu",
+        },
+        "outputs": {
+            "expected_root_cause_keywords": [
+                "addNew",
+                "List enumeration",
+                "collection modified",
+                "ControlPointList",
+                "TimingScreen",
+            ],
+            "expected_affected_files": [
+                "osu.Game/Screens/Edit/Timing/TimingScreen.cs",
+            ],
+            "expected_affected_components": [
+                "TimingScreen",
+                "ControlPointList",
+                "BeatmapEditor",
+            ],
+            "expected_severity": "medium",
+            "expected_category": "crash",
+            "min_reproduction_steps": 4,
+        },
+    },
+
+    # ── 3 ── OpenTTD — Vehicle cloning: pool assertion on stale order station ─
+    # Real issue: https://github.com/OpenTTD/OpenTTD/issues/10223
+    {
+        "_category": "data-integrity crash — pool assertion on deleted station order",
+        "inputs": {
+            "description": (
+                "Cloning any vehicle whose order list contains a reference to a "
+                "recently-deleted station crashes OpenTTD with an assertion in "
+                "pool_type.hpp: 'index < this->first_unused'. "
+                "The crash appears in the pool Get() accessor called from "
+                "vehicle_cmd.cpp after CloneVehicle returns INVALID_VEHICLE "
+                "without marking the result as failed, so the caller passes the "
+                "stale index back into the pool. "
+                "Steps: (1) Create a train and give it an order to stop at "
+                "Station A. (2) Delete Station A. (3) Open the train list and "
+                "click the Clone Vehicle button. (4) Click on the train to clone "
+                "it. Game crashes immediately with a popup loop — clicking OK "
+                "re-shows the same dialog and no crash log is written."
+            ),
+            "environment": "OpenTTD 13.0-beta2 / nightly 20221205, Windows/Linux",
+            "severity_input": "high",
+            "repo_name": "OpenTTD",
+        },
+        "outputs": {
+            "expected_root_cause_keywords": [
+                "CloneVehicle",
+                "INVALID_VEHICLE",
+                "total_cost",
+                "CMD_FAILED",
+                "pool_type",
+                "first_unused",
+            ],
+            "expected_affected_files": [
+                "src/vehicle_cmd.cpp",
+                "src/core/pool_type.hpp",
+            ],
+            "expected_affected_components": [
+                "Vehicle Cloning",
+                "Order Management",
+                "Command System",
+            ],
+            "expected_severity": "high",
+            "expected_category": "crash",
+            "min_reproduction_steps": 4,
+        },
+    },
+
+    # ── 4 ── Cataclysm-DDA — Chinese locale: multi-byte string in tile ID ─────
+    # Real issue: https://github.com/CleverRaven/Cataclysm-DDA/issues/78547
+    {
+        "_category": "encoding crash — multi-byte string in tile ID construction",
+        "inputs": {
+            "description": (
+                "On the macOS tiles build of Cataclysm-DDA, loading or entering "
+                "a map tile that contains graffiti written in Chinese (or any "
+                "multi-byte UTF-8 text) crashes the game with: "
+                "'Assertion failed: (sz != static_cast<size_t>(-1)), function "
+                "utf8_to_wstr, file catacharset.cpp, line 350.' "
+                "Root cause: cata_tiles.cpp constructs a tile ID from the "
+                "graffiti string by calling remove_punctuations() in output.cpp. "
+                "That function iterates the string byte-by-byte calling "
+                "std::ispunct() on each byte; for multi-byte UTF-8 sequences "
+                "this corrupts the string, and the downstream utf8_to_wstr() "
+                "call then fails the size assertion. "
+                "Steps: (1) Start a new game on macOS tiles build. "
+                "(2) Find or place a graffiti tile whose text contains Chinese "
+                "characters. (3) Move the character adjacent to the tile — game "
+                "crashes during map rendering."
+            ),
+            "environment": (
+                "Cataclysm-DDA experimental 2024-12-13, macOS 14 (Sonoma), tiles build"
+            ),
+            "severity_input": "high",
+            "repo_name": "CleverRaven/Cataclysm-DDA",
+        },
+        "outputs": {
+            "expected_root_cause_keywords": [
+                "remove_punctuations",
+                "ispunct",
+                "multi-byte",
+                "utf8_to_wstr",
+                "tile_id",
+                "cata_tiles",
+            ],
+            "expected_affected_files": [
+                "src/cata_tiles.cpp",
+                "src/output.cpp",
+                "src/catacharset.cpp",
+            ],
+            "expected_affected_components": [
+                "Tile Renderer",
+                "String / Charset Utilities",
+                "Graffiti Rendering",
+            ],
+            "expected_severity": "high",
+            "expected_category": "crash",
+            "min_reproduction_steps": 3,
+        },
+    },
+
+    # ── 5 ── Cataclysm-DDA — Faction manager: null deref on vehicle examine ───
+    # Real issue: https://github.com/CleverRaven/Cataclysm-DDA/issues/80567
+    {
+        "_category": "null-pointer crash — faction lookup when examining vehicle",
+        "inputs": {
+            "description": (
+                "Examining an APC (or other faction-owned vehicle) in "
+                "Cataclysm-DDA crashes the game with a segfault inside "
+                "faction_manager::get(const faction_id &id, const bool complain). "
+                "The crash trace shows the loop over faction_manager's internal "
+                "vector finds no matching faction_id and falls off the end, "
+                "returning a reference to a null/garbage faction object which is "
+                "then dereferenced by the vehicle inspection UI. "
+                "Steps: (1) Start or load a save that has military vehicles "
+                "spawned on the map. (2) Locate an APC or military truck. "
+                "(3) Move one step adjacent to the APC. "
+                "(4) Press 'e' (examine) on the APC tile. "
+                "Game crashes immediately with signal 11 / segfault."
+            ),
+            "environment": (
+                "Cataclysm-DDA experimental 2024-11-13 (76de484), Windows 10 22H2, tiles"
+            ),
+            "severity_input": "high",
+            "repo_name": "CleverRaven/Cataclysm-DDA",
+        },
+        "outputs": {
+            "expected_root_cause_keywords": [
+                "faction_manager::get",
+                "faction_id",
+                "null faction",
+                "vehicle examine",
+                "faction_no_faction",
+            ],
+            "expected_affected_files": [
+                "src/faction.cpp",
+                "src/vehicle.cpp",
+            ],
+            "expected_affected_components": [
+                "Faction Manager",
+                "Vehicle Examination",
+                "Map Interaction",
+            ],
+            "expected_severity": "high",
+            "expected_category": "crash",
+            "min_reproduction_steps": 4,
         },
     },
 ]

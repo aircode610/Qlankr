@@ -67,12 +67,12 @@ async def test_returns_stats_for_known_repo():
     assert result["stats"]["processes"] == 5
 
 
-async def test_returns_processes_via_resource_uri():
+async def test_returns_processes_via_cypher():
+    cypher_response = '[{"name": "item_crafting_flow", "description": "Crafting loop"}]'
     list_repos_tool = make_tool("list_repos", return_value="[]")
-    client = make_client(
-        tools=[list_repos_tool],
-        resource_value='[{"name": "item_crafting_flow", "description": "Crafting loop"}]',
-    )
+    cypher_tool = make_tool("cypher", return_value=cypher_response)
+    client = make_client(tools=[list_repos_tool, cypher_tool])
+    client.get_tools = AsyncMock(return_value=[list_repos_tool, cypher_tool])
 
     with patch("agent.prefetch.get_mcp_client", return_value=client):
         result = await prefetch_context("https://github.com/owner/repo/pull/1", "repo")
@@ -91,7 +91,6 @@ async def test_cypher_fallback_when_resource_read_fails():
         tools=[list_repos_tool, cypher_tool],
         resource_raises=True,
     )
-    # get_tools is called twice (once for tools, once inside _fetch_processes fallback)
     client.get_tools = AsyncMock(return_value=[list_repos_tool, cypher_tool])
 
     with patch("agent.prefetch.get_mcp_client", return_value=client):

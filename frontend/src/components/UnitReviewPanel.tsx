@@ -2,6 +2,32 @@ import { useState } from 'react';
 import { CheckCircle, RefreshCw, Send, ChevronDown, ChevronRight, Code, ExternalLink } from '@/lib/lucide-icons';
 import type { CheckpointData } from '../services/types';
 
+const TestCaseRow = ({ tc }: { tc: { name: string; scenario: string; expected: string } }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded bg-elevated/50">
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-start gap-2 px-2 py-1.5 text-left"
+      >
+        {open
+          ? <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />
+          : <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-text-muted" />}
+        <span className="font-mono text-[10px] font-medium text-text-primary leading-snug">{tc.name}</span>
+        {!open && (
+          <span className="ml-auto max-w-[40%] shrink-0 truncate text-[10px] text-text-muted">{tc.scenario}</span>
+        )}
+      </button>
+      {open && (
+        <div className="border-t border-border-subtle px-2 pb-2 pt-1.5">
+          <p className="text-[10px] leading-relaxed text-text-muted">{tc.scenario}</p>
+          <p className="mt-1 text-[10px] text-emerald-400">→ {tc.expected}</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface UnitReviewPanelProps {
   checkpoint: CheckpointData;
   onApprove: () => void;
@@ -129,11 +155,7 @@ export const UnitReviewPanel = ({ checkpoint, onApprove, onRefine, onFileNavigat
                                 </div>
                               )}
                               {spec.test_cases.map((tc, ti) => (
-                                <div key={ti} className="mb-1 rounded bg-elevated/50 px-2 py-1.5">
-                                  <p className="font-mono text-[10px] font-medium text-text-primary">{tc.name}</p>
-                                  <p className="text-[10px] text-text-muted">{tc.scenario}</p>
-                                  <p className="text-[10px] text-emerald-400">→ {tc.expected}</p>
-                                </div>
+                                <TestCaseRow key={ti} tc={tc} />
                               ))}
                             </div>
                           </div>

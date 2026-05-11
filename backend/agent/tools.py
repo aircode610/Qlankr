@@ -1,10 +1,12 @@
 import json
 import os
 import shutil
+from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.tools import StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools as _load_mcp_tools
 
 
 # ── Stage tool subsets ────────────────────────────────────────────────────────
@@ -121,9 +123,10 @@ JIRA_TOOL_ALIASES: dict[str, str] = {
 }
 
 NOTION_TOOL_ALIASES: dict[str, str] = {
-    "search": "notion_search",
-    "get_page": "notion_get_page",
-    "get_database": "notion_get_database",
+    # @notionhq/notion-mcp-server uses OpenAPI-style naming (API-*)
+    "API-post-search": "notion_search",
+    "API-retrieve-a-page": "notion_get_page",
+    "API-retrieve-a-database": "notion_get_database",
 }
 
 CONFLUENCE_TOOL_ALIASES: dict[str, str] = {
@@ -163,7 +166,6 @@ def _normalize_tool_names(tools: list) -> list:
 
 
 def _server_config() -> dict:
-    import shutil
     utf8_env = {
         **os.environ,
         "PYTHONUTF8": "1",
@@ -184,6 +186,7 @@ def _server_config() -> dict:
         },
     }
     # Jira — mcp-atlassian Python package (pip install mcp-atlassian)
+    # mcp-atlassian v0.21+ expects JIRA_USERNAME (not JIRA_EMAIL) for basic auth
     if os.environ.get("JIRA_URL") and os.environ.get("JIRA_API_TOKEN"):
         config["jira"] = {
             "transport": "stdio",
@@ -192,7 +195,7 @@ def _server_config() -> dict:
             "env": {
                 **utf8_env,
                 "JIRA_URL": os.environ["JIRA_URL"],
-                "JIRA_EMAIL": os.environ.get("JIRA_EMAIL", ""),
+                "JIRA_USERNAME": os.environ.get("JIRA_EMAIL", ""),
                 "JIRA_API_TOKEN": os.environ["JIRA_API_TOKEN"],
             },
         }
@@ -221,6 +224,7 @@ def _server_config() -> dict:
             },
         }
     # Confluence — mcp-atlassian Python package (same package as Jira, separate entry)
+    # mcp-atlassian v0.21+ expects CONFLUENCE_USERNAME + CONFLUENCE_API_TOKEN for basic auth
     if os.environ.get("CONFLUENCE_URL") and os.environ.get("CONFLUENCE_TOKEN"):
         config["confluence"] = {
             "transport": "stdio",
@@ -229,7 +233,8 @@ def _server_config() -> dict:
             "env": {
                 **utf8_env,
                 "CONFLUENCE_URL": os.environ["CONFLUENCE_URL"],
-                "CONFLUENCE_TOKEN": os.environ["CONFLUENCE_TOKEN"],
+                "CONFLUENCE_USERNAME": os.environ.get("JIRA_EMAIL", ""),
+                "CONFLUENCE_API_TOKEN": os.environ["CONFLUENCE_TOKEN"],
                 "CONFLUENCE_SPACE_KEY": os.environ.get("CONFLUENCE_SPACE_KEY", ""),
             },
         }
@@ -275,13 +280,81 @@ def _server_config() -> dict:
 
 def get_mcp_client() -> MultiServerMCPClient:
     """
-    Returns a MultiServerMCPClient instance configured with GitHub and GitNexus servers.
+    Returns a MultiServerMCPClient configured with all enabled MCP servers.
 
-    Usage (async context manager):
-        async with get_mcp_client() as client:
-            tools = await client.get_tools()
+    Prefer ``open_persistent_mcp_sessions()`` for pipeline runs — it keeps
+    each server process alive for the full duration so every tool call reuses
+    the same connection instead of spawning a new server process.
+
+    Use ``get_tools()`` only for one-off debug endpoints that don't need
+    persistent sessions.
     """
     return MultiServerMCPClient(_server_config())
+
+
+async def open_persistent_mcp_sessions(
+    client: MultiServerMCPClient,
+    stack: AsyncExitStack,
+) -> list:
+    """Open a persistent stdio session for every configured MCP server.
+
+    Unlike ``client.get_tools()`` (which spawns a fresh server process on every
+    tool ``.ainvoke()`` call), tools returned here are **bound to their open
+    sessions**.  All subsequent tool calls reuse the already-running process —
+    zero additional spawns.
+
+    The caller is responsible for keeping *stack* alive for as long as the
+    tools are in use.  Closing the stack terminates the server processes.
+
+    Args:
+        client: A ``MultiServerMCPClient`` instance built by ``get_mcp_client()``.
+        stack:  An ``AsyncExitStack`` owned by the caller (pipeline run scope).
+
+    Returns:
+        Combined list of ``BaseTool`` objects from all servers, each bound to
+        its persistent session.
+
+    Example::
+
+        async with AsyncExitStack() as stack:
+            tools = await open_persistent_mcp_sessions(get_mcp_client(), stack)
+            # tools can be called freely — servers stay alive until here
+    """
+    all_tools: list = []
+    for server_name in client.connections:
+        try:
+            session = await stack.enter_async_context(client.session(server_name))
+            server_tools = await _load_mcp_tools(session, server_name=server_name)
+            all_tools.extend(server_tools)
+            print(f"[mcp] opened persistent session for {server_name!r} ({len(server_tools)} tools)", flush=True)
+        except Exception as exc:
+            print(f"[mcp] failed to open session for {server_name!r}: {exc}", flush=True)
+    return all_tools
+
+
+def get_gitnexus_client() -> MultiServerMCPClient | None:
+    """Return a client configured *only* for the GitNexus server, or None if unavailable.
+
+    Use this in the indexer / graph endpoints so querying GitNexus does NOT
+    spawn GitHub, Jira, Confluence, Notion etc. alongside it.
+    """
+    if not shutil.which("gitnexus"):
+        return None
+    utf8_env = {
+        **os.environ,
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "LANG": "en_US.UTF-8",
+        "LC_ALL": "en_US.UTF-8",
+    }
+    return MultiServerMCPClient({
+        "gitnexus": {
+            "transport": "stdio",
+            "command": "gitnexus",
+            "args": ["mcp"],
+            "env": utf8_env,
+        }
+    })
 
 
 def get_available_integrations() -> list[str]:
