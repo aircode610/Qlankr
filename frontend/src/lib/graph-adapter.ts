@@ -199,13 +199,9 @@ export const knowledgeGraphToGraphology = (
     if (graph.hasNode(rel.sourceId) && graph.hasNode(rel.targetId)) {
       if (!graph.hasEdge(rel.sourceId, rel.targetId)) {
         const style = EDGE_STYLES[rel.type] || { color: '#4a4a5a', sizeMultiplier: 0.5 };
-        // Colour the edge by the source node's cluster colour so edge colour
-        // matches the cluster grouping.  Fall back to the static type colour
-        // for nodes that have no cluster assignment.
-        const sourceColor = graph.getNodeAttribute(rel.sourceId, 'communityColor') || style.color;
         graph.addEdge(rel.sourceId, rel.targetId, {
           size: edgeBaseSize * style.sizeMultiplier,
-          color: sourceColor,
+          color: style.color,
           relationType: rel.type,
           type: 'curved',
           curvature: 0.12 + Math.random() * 0.08,

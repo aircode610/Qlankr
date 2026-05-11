@@ -146,7 +146,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       labelFont: 'JetBrains Mono, monospace',
       labelSize: 11,
       labelWeight: '500',
-      labelColor: { color: '#e4e4ed' },
+      labelColor: { color: themeRef.current === 'light' ? '#0f1117' : '#e4e4ed' },
       labelRenderedSizeThreshold: 8,
       labelDensity: 0.1,
       labelGridCellSize: 70,

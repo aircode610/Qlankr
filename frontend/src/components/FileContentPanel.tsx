@@ -11,12 +11,17 @@ interface FileContentPanelProps {
 export const FileContentPanel = ({ filePath, repoName, onClose }: FileContentPanelProps) => {
   const [content, setContent] = useState<string | null>(null);
   const [language, setLanguage] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!repoName || !filePath) return;
+    if (!filePath) return;
+    if (!repoName) {
+      setLoading(false);
+      setError('Repo not loaded yet — wait for indexing or reload the page.');
+      return;
+    }
     setLoading(true);
     setError(null);
     setContent(null);

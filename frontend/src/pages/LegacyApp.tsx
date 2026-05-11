@@ -621,10 +621,23 @@ const AppContent = () => {
     );
   }
 
-  // Derive a short repo name for the navbar badge
-  const repoName = repoUrl
-    ? repoUrl.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
-    : null;
+  // Derive a short repo name for the navbar badge.
+  // Prefer the live repoUrl (set during index/open), fall back to the loaded
+  // project record so deep-links and hard reloads still know the repo. Try
+  // owner/repo_name first, then repo_url, then a slash-shaped name field.
+  const repoName = (() => {
+    const fromUrl = (u: string) =>
+      u.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+    if (repoUrl) return fromUrl(repoUrl);
+    if (routeProject?.owner && routeProject?.repo_name) {
+      return `${routeProject.owner}/${routeProject.repo_name}`;
+    }
+    if (routeProject?.repo_url) return fromUrl(routeProject.repo_url);
+    if (routeProject?.name && routeProject.name.includes('/')) {
+      return routeProject.name;
+    }
+    return null;
+  })();
 
   // ── Workspace ────────────────────────────────────────────────
   return (

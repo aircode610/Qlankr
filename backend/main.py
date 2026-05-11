@@ -86,7 +86,7 @@ async def index(request: IndexRequest, user_id: UUID = Depends(get_current_user)
     else:
         print("[INDEX] WARNING called without project_id", flush=True)
     return StreamingResponse(
-        stream_response(index_repo(user_id, request.repo_url)),
+        stream_response(index_repo(user_id, request.repo_url, project_id=request.project_id)),
         media_type="text/event-stream",
     )
 

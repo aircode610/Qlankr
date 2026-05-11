@@ -2,8 +2,8 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from typing import AsyncIterator
 from urllib.parse import urlparse
@@ -19,7 +19,7 @@ from models import (
     IndexStepEvent,
 )
 from projects import create_project, list_projects, parse_repo_url, update_status
-from graph_paths import graph_dir
+from graph_paths import clone_dir, graph_dir
 
 
 _STAGE_KEYWORDS: list[tuple[str, str]] = [
@@ -104,8 +104,14 @@ def get_clone_path(user_id: UUID, owner: str, repo: str) -> str | None:
 async def index_repo(
     user_id: UUID,
     repo_url: str,
+    project_id: str | None = None,
 ) -> AsyncIterator[IndexStepEvent | IndexDoneEvent | ErrorEvent]:
-    """SSE-streaming indexing pipeline; updates project status as it progresses."""
+    """SSE-streaming indexing pipeline; updates project status as it progresses.
+
+    If `project_id` is provided (the normal /index path), the pipeline writes
+    status updates to that specific row. Otherwise (CLI/programmatic callers),
+    it falls back to lookup-or-create by repo_url.
+    """
     try:
         owner, repo = _parse_owner_repo(repo_url)
     except ValueError as e:
@@ -113,14 +119,22 @@ async def index_repo(
         return
 
     repo_key = f"{owner}/{repo}"
-    tmp_dir = tempfile.mkdtemp(prefix="qlankr_")
-    clone_path = os.path.join(tmp_dir, repo)
+    # Persistent per-user clone path so file-content lookups survive container
+    # restarts. Wipe any stale clone from a prior aborted run before re-cloning.
+    clone_path = str(clone_dir(user_id, owner, repo, ensure_parent=True))
+    if os.path.isdir(clone_path):
+        shutil.rmtree(clone_path)
 
-    # Create or retrieve the project record
-    project = create_project(user_id, repo_url=repo_url)
-    project_id = project["id"]
+    # Use the caller-supplied project row when present; otherwise fall back to
+    # lookup-or-create by URL. Without this, every indexing run resolved to
+    # whichever project was first inserted for this URL, leaving any newer
+    # rows with the same URL stranded in `pending`.
+    if project_id is None:
+        project = create_project(user_id, repo_url=repo_url)
+        project_id = project["id"]
 
     # Mark as indexing
+    print(f"[indexer] status -> indexing (project={project_id})", flush=True)
     update_status(user_id, project_id, status="indexing")
 
     # ── Clone ──────────────────────────────────────────────────────────────────
@@ -133,10 +147,12 @@ async def index_repo(
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
+            print(f"[indexer] status -> failed (clone): {stderr.decode().strip()}", flush=True)
             update_status(user_id, project_id, status="failed", error=f"git clone failed: {stderr.decode().strip()}")
             yield ErrorEvent(message=f"git clone failed: {stderr.decode().strip()}")
             return
     except Exception as e:
+        print(f"[indexer] status -> failed (clone exception): {e}", flush=True)
         update_status(user_id, project_id, status="failed", error=f"git clone error: {e}")
         yield ErrorEvent(message=f"git clone error: {e}")
         return
@@ -147,8 +163,13 @@ async def index_repo(
     yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze?")
     indexed_marker_seen = False  # gitnexus emits "Repository indexed successfully" before any post-success crash
     try:
+        # Opt-in semantic embeddings via env var. Off by default because
+        # onnxruntime-node prebuilt binaries don't reliably load inside our
+        # python:3.12-slim container. Set QLANKR_GITNEXUS_EMBEDDINGS=1 when
+        # running the backend locally to enable hybrid BM25 + semantic search.
+        embeddings_flag = ["--embeddings"] if os.environ.get("QLANKR_GITNEXUS_EMBEDDINGS") else []
         proc = await asyncio.create_subprocess_exec(
-            "gitnexus", "analyze", clone_path,
+            "gitnexus", "analyze", clone_path, *embeddings_flag,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=clone_path,
@@ -175,31 +196,47 @@ async def index_repo(
                     summary=f"gitnexus exited {proc.returncode} after successful indexing; continuing",
                 )
             else:
+                print(f"[indexer] status -> failed (gitnexus exit {proc.returncode})", flush=True)
                 update_status(user_id, project_id, status="failed", error=f"gitnexus analyze exited with code {proc.returncode}")
                 yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
                 return
     except FileNotFoundError:
+        print("[indexer] status -> failed (gitnexus binary not found)", flush=True)
         update_status(user_id, project_id, status="failed", error="gitnexus not found")
         yield ErrorEvent(message="gitnexus not found ? is it installed?")
         return
     except Exception as e:
+        print(f"[indexer] status -> failed (gitnexus analyze exception): {e}", flush=True)
         update_status(user_id, project_id, status="failed", error=f"gitnexus analyze error: {e}")
         yield ErrorEvent(message=f"gitnexus analyze error: {e}")
         return
+
+    # Mark ready + record clone_path as soon as the clone + analyze are done,
+    # so the project is usable (file viewing, graph viewing) even if the SSE
+    # client disconnects before the MCP stats fetch finishes. Without this, a
+    # cancelled stream would leave the row stuck at 'indexing' with no
+    # clone_path in graph_stats.
+    now = datetime.now(timezone.utc).isoformat()
+    print(f"[indexer] status -> ready (clone_path={clone_path})", flush=True)
+    update_status(
+        user_id,
+        project_id,
+        status="ready",
+        stats={"clone_path": clone_path},
+        last_indexed_at=now,
+    )
 
     # ── Fetch stats + graph via MCP ────────────────────────────────────────────
     yield IndexStepEvent(stage="analyze", summary="Fetching graph data from GitNexus?")
     stats, graph = await _fetch_stats_and_graph(repo)
 
-    # Store clone_path in graph_stats so get_clone_path can find it later
-    stats_with_path = {**stats, "clone_path": clone_path}
-
-    now = datetime.now(timezone.utc).isoformat()
+    # Merge fetched stats into the existing graph_stats (preserving clone_path).
+    print(f"[indexer] status -> ready+stats ({stats})", flush=True)
     update_status(
         user_id,
         project_id,
         status="ready",
-        stats=stats_with_path,
+        stats={**stats, "clone_path": clone_path},
         last_indexed_at=now,
     )
 
