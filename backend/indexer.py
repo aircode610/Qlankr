@@ -148,7 +148,7 @@ async def index_repo(
     indexed_marker_seen = False  # gitnexus emits "Repository indexed successfully" before any post-success crash
     try:
         proc = await asyncio.create_subprocess_exec(
-            "gitnexus", "analyze", clone_path, "--embeddings",
+            "gitnexus", "analyze", clone_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=clone_path,
