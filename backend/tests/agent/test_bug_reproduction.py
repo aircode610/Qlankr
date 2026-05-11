@@ -17,6 +17,12 @@ import json
 import sys
 from pathlib import Path
 
+# Force UTF-8 output on Windows to handle Unicode characters in LLM responses
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
@@ -113,12 +119,12 @@ def _print_evals(combined: dict) -> None:
     ]
     for ev in all_evals:
         result = ev(combined)
-        score_bar = "█" * int(result["score"] * 10) + "░" * (10 - int(result["score"] * 10))
+        score_bar = "#" * int(result["score"] * 10) + "-" * (10 - int(result["score"] * 10))
         print(f"\n  {result['key']}")
         print(f"  score   : {score_bar}  {result['score']:.2f}")
         print(f"  summary : {result['comment']}")
         for d in result.get("details", []):
-            icon = "✓" if d["passed"] else "✗"
+            icon = "+" if d["passed"] else "x"
             print(f"    {icon} {d['check']:<50} {d['value']}")
 
 
@@ -131,7 +137,7 @@ async def _print_judge_evals(combined: dict, inputs: dict) -> None:
     for judge in judges:
         try:
             result = await judge(inputs=inputs, outputs=combined)
-            score_bar = "█" * int(result["score"] * 10) + "░" * (10 - int(result["score"] * 10))
+            score_bar = "#" * int(result["score"] * 10) + "-" * (10 - int(result["score"] * 10))
             print(f"\n  {result['key']}  [J]")
             print(f"  score   : {score_bar}  {result['score']:.2f}")
             print(f"  summary : {result.get('comment', '')}")
@@ -144,7 +150,7 @@ async def _print_judge_evals(combined: dict, inputs: dict) -> None:
 async def run_pipeline():
     """Run the full graph through bug_agent — shared MCP client, real checkpoints auto-approved."""
     from agent.bug_agent import run_bug_agent, continue_bug_agent, BugResultEvent
-    from models import CheckpointEvent, ErrorEvent, StageChangeEvent, AgentStepEvent
+    from models import BugCheckpointEvent, ErrorEvent, BugStageChangeEvent, AgentStepEvent
 
     print("Running full pipeline via bug_agent (checkpoints auto-approved)\n")
 
@@ -153,19 +159,20 @@ async def run_pipeline():
     checkpoint_count = 0
 
     async def _stream(generator):
+        terminal = None
         async for event in generator:
-            if isinstance(event, StageChangeEvent):
+            if isinstance(event, BugStageChangeEvent):
                 print(f"\n>>> STAGE: {event.stage}", flush=True)
             elif isinstance(event, AgentStepEvent):
-                print(f"  → {event.summary}", flush=True)
-            elif isinstance(event, CheckpointEvent):
-                return event
+                print(f"  -> {event.summary}", flush=True)
+            elif isinstance(event, BugCheckpointEvent):
+                terminal = event  # capture but keep draining so generator closes cleanly
             elif isinstance(event, BugResultEvent):
-                return event
+                terminal = event
             elif isinstance(event, ErrorEvent):
                 print(f"\n!!! ERROR: {event.message}")
-                return None
-        return None
+                terminal = None
+        return terminal
 
     # Start pipeline
     result = await _stream(run_bug_agent(
@@ -177,7 +184,7 @@ async def run_pipeline():
     ))
 
     # Auto-approve checkpoints
-    while isinstance(result, CheckpointEvent):
+    while isinstance(result, BugCheckpointEvent):
         checkpoint_count += 1
         print(f"\n>>> CHECKPOINT [{checkpoint_count}]: {result.interrupt_type}", flush=True)
         print(f"    stage_completed: {result.stage_completed}", flush=True)
@@ -192,9 +199,9 @@ async def run_pipeline():
         print(f"\n{'='*60}")
         print("=== FINAL BUG REPORT ===")
         print(f"{'='*60}")
-        print(json.dumps(result.bug_report, indent=2))
-        # Use full_state so evaluators can access triage/mechanics/reproduction_plan/research_findings
-        combined = result.full_state if result.full_state else {"bug_report": result.bug_report}
+        report_dict = result.report.model_dump() if hasattr(result.report, "model_dump") else result.report
+        print(json.dumps(report_dict, indent=2, default=str))
+        combined = result.full_state if result.full_state else {"bug_report": report_dict}
     else:
         print("\nPipeline did not produce a result.")
         return
