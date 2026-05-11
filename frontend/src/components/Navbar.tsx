@@ -18,7 +18,7 @@ export const Navbar = ({ view, onViewChange, repoName, analyzing, activeWorkflow
   <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border-subtle bg-surface px-4">
     {/* Brand */}
     <div className="flex items-center gap-2">
-      <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-violet-800 shadow-[0_0_8px_rgba(124,58,237,0.4)]">
+      <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-accent to-accent-dim shadow-glow">
         <Zap className="h-3.5 w-3.5 text-white" />
       </div>
       <span className="text-sm font-semibold tracking-tight text-text-primary">Qlankr</span>

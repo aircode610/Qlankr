@@ -94,17 +94,29 @@
    Applied when :root has the "light" class (toggled via useTheme)
 ═══════════════════════════════════════════════════════════════ */
 :root.light {
-  --color-void: #f0f2f5;
-  --color-deep: #e8eaef;
+  /* Backgrounds */
+  --color-void: #f1f5f9;
+  --color-deep: #e2e8f0;
   --color-surface: #ffffff;
-  --color-elevated: #f8f9fc;
-  --color-hover: #eceef3;
-  --color-border-subtle: #dde1e9;
-  --color-border-default: #c8cdd8;
-  --color-text-primary: #0f1117;
-  --color-text-secondary: #4a5068;
-  --color-text-muted: #8890a8;
-  /* accent stays the same in both modes */
+  --color-elevated: #f8fafc;
+  --color-hover: #f1f5f9;
+
+  /* Borders */
+  --color-border-subtle: #e2e8f0;
+  --color-border-default: #cbd5e1;
+
+  /* Text */
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+
+  /* Accent — blue instead of purple for light mode */
+  --color-accent: #2563eb;
+  --color-accent-dim: #1d4ed8;
+
+  /* Shadows */
+  --shadow-glow: 0 0 20px rgba(37, 99, 235, 0.3);
+  --shadow-glow-soft: 0 0 40px rgba(37, 99, 235, 0.12);
 }
 
 * { box-sizing: border-box; }

@@ -77,7 +77,7 @@ export const IndexingPage = ({
 
         {/* Branding */}
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-violet-800 shadow-[0_0_32px_rgba(124,58,237,0.35)]">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent to-accent-dim shadow-glow-soft">
             <Zap className="h-7 w-7 text-white" />
           </div>
           <div>
