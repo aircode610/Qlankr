@@ -157,6 +157,21 @@ function normaliseBackendGraph(raw: BackendGraphData): NormalisedGraph {
     reason: '',
   }));
 
+  // Synthesise MEMBER_OF edges from the cluster field so graph-adapter
+  // can colour file nodes by cluster membership.
+  raw.nodes.forEach((n) => {
+    if (n.type !== 'cluster' && n.cluster) {
+      relationships.push({
+        id: `member_of_${n.id}`,
+        sourceId: n.id,
+        targetId: n.cluster,
+        type: 'MEMBER_OF' as GraphRelationship['type'],
+        confidence: 1,
+        reason: '',
+      });
+    }
+  });
+
   return { nodes, relationships };
 }
 

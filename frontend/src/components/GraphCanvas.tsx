@@ -68,14 +68,20 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   useEffect(() => {
     if (!graph) return;
     const communityMemberships = new Map<string, number>();
+    // Build a stable cluster-id → sequential-index map so node colours don't
+    // depend on the backend's id format (e.g. "cluster_abc" rather than "comm_0").
+    const clusterIndexMap = new Map<string, number>();
+    graph.relationships.forEach((rel) => {
+      if (rel.type === 'MEMBER_OF' && !clusterIndexMap.has(rel.targetId)) {
+        clusterIndexMap.set(rel.targetId, clusterIndexMap.size);
+      }
+    });
     graph.relationships.forEach((rel) => {
       if (rel.type === 'MEMBER_OF') {
-        const communityNode = nodeById.get(rel.targetId);
-        if (communityNode && communityNode.label === 'Community') {
-          const numericPart = rel.targetId.replace('comm_', '');
-          const communityIdx = /^\d+$/.test(numericPart) ? parseInt(numericPart, 10) : 0;
-          communityMemberships.set(rel.sourceId, communityIdx);
-        }
+        // Cluster nodes are not included in GraphData.nodes, so nodeById won't
+        // find them. The MEMBER_OF edge itself is the authoritative source.
+        const idx = clusterIndexMap.get(rel.targetId) ?? 0;
+        communityMemberships.set(rel.sourceId, idx);
       }
     });
     setSigmaGraph(knowledgeGraphToGraphology(graph, communityMemberships));

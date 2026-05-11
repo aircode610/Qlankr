@@ -125,10 +125,9 @@ export const knowledgeGraphToGraphology = (
 
     let x: number, y: number;
     const communityIndex = communityMemberships?.get(nodeId);
-    const symbolTypes = new Set(['Function', 'Class', 'Method', 'Interface']);
     const clusterCenter = communityIndex !== undefined ? clusterCenters.get(communityIndex) : null;
 
-    if (clusterCenter && symbolTypes.has(node.label)) {
+    if (clusterCenter) {
       x = clusterCenter.x + (Math.random() - 0.5) * clusterJitter;
       y = clusterCenter.y + (Math.random() - 0.5) * clusterJitter;
     } else {
@@ -145,11 +144,14 @@ export const knowledgeGraphToGraphology = (
 
     nodePositions.set(nodeId, { x, y });
     const hasCommunity = communityIndex !== undefined;
+    const nodeColor = hasCommunity
+      ? getCommunityColor(communityIndex!)
+      : NODE_COLORS[node.label] || '#9ca3af';
 
     graph.addNode(nodeId, {
       x, y,
       size: getScaledNodeSize(NODE_SIZES[node.label] || 8, nodeCount),
-      color: NODE_COLORS[node.label] || '#9ca3af',
+      color: nodeColor,
       label: node.properties.name,
       nodeType: node.label,
       filePath: node.properties.filePath,
@@ -191,12 +193,19 @@ export const knowledgeGraphToGraphology = (
   };
 
   knowledgeGraph.relationships.forEach((rel) => {
+    // MEMBER_OF is a virtual relationship used only for cluster assignment;
+    // don't draw it as a visible edge.
+    if (rel.type === 'MEMBER_OF') return;
     if (graph.hasNode(rel.sourceId) && graph.hasNode(rel.targetId)) {
       if (!graph.hasEdge(rel.sourceId, rel.targetId)) {
         const style = EDGE_STYLES[rel.type] || { color: '#4a4a5a', sizeMultiplier: 0.5 };
+        // Colour the edge by the source node's cluster colour so edge colour
+        // matches the cluster grouping.  Fall back to the static type colour
+        // for nodes that have no cluster assignment.
+        const sourceColor = graph.getNodeAttribute(rel.sourceId, 'communityColor') || style.color;
         graph.addEdge(rel.sourceId, rel.targetId, {
           size: edgeBaseSize * style.sizeMultiplier,
-          color: style.color,
+          color: sourceColor,
           relationType: rel.type,
           type: 'curved',
           curvature: 0.12 + Math.random() * 0.08,
