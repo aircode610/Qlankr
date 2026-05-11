@@ -39,6 +39,8 @@ from evals.bug_evaluators import (
     triage_accuracy, mechanics_grounding, reproduction_executability,
     bug_pipeline_health, research_coverage, report_completeness,
     report_actionability, evidence_quality, tool_efficiency, graceful_degradation,
+    # LLM-as-judge (async)
+    root_cause_quality, report_coherence, reproduction_step_clarity,
 )
 
 # ── Sample bug description ────────────────────────────────────────────────────
@@ -102,7 +104,7 @@ def _print_result(stage: str, result: dict) -> None:
 
 def _print_evals(combined: dict) -> None:
     print(f"\n{'='*60}")
-    print("=== EVALUATOR SCORES ===")
+    print("=== EVALUATOR SCORES (deterministic) ===")
     print(f"{'='*60}")
     all_evals = [
         triage_accuracy, mechanics_grounding, reproduction_executability,
@@ -118,6 +120,23 @@ def _print_evals(combined: dict) -> None:
         for d in result.get("details", []):
             icon = "✓" if d["passed"] else "✗"
             print(f"    {icon} {d['check']:<50} {d['value']}")
+
+
+async def _print_judge_evals(combined: dict, inputs: dict) -> None:
+    """Run the three async LLM-as-judge evaluators and print their scores."""
+    print(f"\n{'='*60}")
+    print("=== EVALUATOR SCORES (LLM-as-judge) ===")
+    print(f"{'='*60}")
+    judges = [root_cause_quality, report_coherence, reproduction_step_clarity]
+    for judge in judges:
+        try:
+            result = await judge(inputs=inputs, outputs=combined)
+            score_bar = "█" * int(result["score"] * 10) + "░" * (10 - int(result["score"] * 10))
+            print(f"\n  {result['key']}  [J]")
+            print(f"  score   : {score_bar}  {result['score']:.2f}")
+            print(f"  summary : {result.get('comment', '')}")
+        except Exception as exc:
+            print(f"\n  {judge.__name__}  [J]  ERROR: {exc}")
 
 
 # ── Full pipeline via bug_agent (recommended) ─────────────────────────────────
@@ -181,6 +200,12 @@ async def run_pipeline():
         return
 
     _print_evals(combined)
+
+    inputs = {
+        "description": BUG_DESCRIPTION,
+        "environment": _fixture.get("environment", "unspecified"),
+    }
+    await _print_judge_evals(combined, inputs)
 
 
 # ── Individual stage runners (bypass graph, useful for quick iteration) ───────
