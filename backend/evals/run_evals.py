@@ -100,16 +100,22 @@ _E2E_EVALUATORS = [
     e2e_plan_structure,
 ]
 
-# Subset that applies to external baselines (e.g. vanilla Claude) — only
-# content-level evaluators that don't depend on Qlankr's tool trace, stages,
-# or test specs. Same metrics the Qlankr agent is scored on, so side-by-side
-# comparisons are apples-to-apples.
+# Subset that applies to external baselines (e.g. vanilla Claude) — content
+# evaluators plus test-spec evaluators (vanilla also produces unit/integration/
+# e2e specs from the same single LLM call). Skips Qlankr-machinery metrics
+# (tool_coverage, gitnexus_usage, pipeline_progression, confidence_calibration,
+# no_crash) that don't apply to a tool-less baseline.
 _BASELINE_EVALUATORS = [
     output_completeness,
     component_count,
     component_matching,
     risk_quality,
     groundedness,
+    unit_test_structure,
+    unit_test_quality,
+    integration_test_structure,
+    integration_test_quality,
+    e2e_plan_structure,
 ]
 
 

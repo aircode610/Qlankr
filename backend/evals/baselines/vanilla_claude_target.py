@@ -23,7 +23,7 @@ from langchain_anthropic import ChatAnthropic
 _llm = ChatAnthropic(
     model="claude-sonnet-4-6",
     temperature=0,
-    max_tokens=4096,
+    max_tokens=16384,  # full analysis with unit + integration + e2e fills 4-7k easily
     api_key=(
         os.environ.get("ANTHROPIC_AUTH_TOKEN")
         or os.environ.get("ANTHROPIC_API_KEY")
@@ -32,7 +32,7 @@ _llm = ChatAnthropic(
 )
 
 
-_PROMPT = """You are a QA engineer reviewing a GitHub pull request.
+_PROMPT = """You are a QA engineer reviewing a GitHub pull request and producing a full test plan.
 
 PR URL: {pr_url}
 PR title: {pr_title}
@@ -47,12 +47,13 @@ Full diff:
 {pr_diff}
 ```
 
-Analyze the diff and produce a structured QA impact analysis. You have ONLY the
-diff above — no access to the rest of the codebase, no call graphs, no docs.
-Use your judgment based purely on what the diff shows and what you can infer
-from file paths, function names, and standard software engineering knowledge.
+Analyze the diff and produce a structured QA analysis with unit tests,
+integration tests, AND end-to-end test plans. You have ONLY the diff above —
+no access to the rest of the codebase, no call graphs, no docs. Use your
+judgment based purely on what the diff shows and what you can infer from file
+paths, function names, and standard software engineering knowledge.
 
-Return a JSON object with this exact shape:
+Return a JSON object with this EXACT shape — every field must be present:
 {{
   "pr_summary": "<1-2 sentence summary of what this PR does>",
   "affected_components": [
@@ -61,20 +62,61 @@ Return a JSON object with this exact shape:
       "files_changed": ["<file path from the diff>", ...],
       "impact_summary": "<1-2 sentences on what this change affects>",
       "risks": ["<specific risk 1>", "<specific risk 2>", ...],
-      "confidence": "low"
+      "confidence": "low",
+      "unit_tests": [
+        {{
+          "target": "<specific function/class/symbol to test, e.g. ParseTimetable>",
+          "test_cases": [
+            {{"name": "<short test name>", "expected": "<concrete expected outcome>"}},
+            ...
+          ],
+          "priority": "high|medium|low",
+          "mocks_needed": ["<external dep to mock if any>", ...]
+        }}
+      ],
+      "integration_tests": [
+        {{
+          "integration_point": "<the cross-module boundary being tested>",
+          "modules_involved": ["<module A>", "<module B>"],
+          "test_cases": [
+            {{"name": "<short test name>", "expected": "<concrete expected outcome>"}},
+            ...
+          ],
+          "data_setup": "<specific fixtures/state needed to reproduce the scenario>",
+          "risk_level": "CRITICAL|HIGH|MEDIUM|LOW"
+        }}
+      ]
+    }}
+  ],
+  "e2e_test_plans": [
+    {{
+      "process": "<the user-facing process being exercised, e.g. 'Vehicle order editing'>",
+      "scenario": "<specific scenario this plan covers>",
+      "steps": [
+        "<step 1>",
+        "<step 2>",
+        ...
+      ],
+      "priority": "CRITICAL|HIGH|MEDIUM|LOW"
     }}
   ]
 }}
 
-CRITICAL:
-- Group related changes into the same component (e.g. all changes to
-  `src/auth/*.go` are likely one "Auth" component).
-- `risks` must be specific and grounded in the diff — not generic platitudes
-  like "could introduce bugs". Each risk should reference what specifically
-  could go wrong and why.
+CRITICAL RULES:
+- Group related changes into one component (e.g. all changes under `src/auth/*`
+  belong to one "Auth" component).
+- `risks` must be specific, grounded in the diff — not "could introduce bugs".
+- `unit_tests[].target` must name a specific symbol from the diff (not "the
+  function"). `test_cases[].expected` must be concrete and verifiable.
+- `integration_tests[].modules_involved` must contain at least 2 distinct modules.
+- `integration_tests[].risk_level` uses UPPERCASE (CRITICAL/HIGH/MEDIUM/LOW).
+  `unit_tests[].priority` uses lowercase (high/medium/low).
+- `e2e_test_plans` covers user-facing flows the PR touches. Even bugfixes
+  should have at least one E2E plan describing how a tester would verify the
+  fix end-to-end.
 - `confidence` is always "low" — you don't have the codebase to verify.
-- Return at least 1 component. If the PR is trivial, return one component
-  with one risk.
+- Return at least 1 component, at least 1 unit test per component, and at
+  least 1 e2e plan total.
 
 Return ONLY the JSON object, no prose, no markdown fences."""
 
@@ -178,7 +220,11 @@ async def vanilla_claude_target(inputs: dict) -> dict:
         }
 
     parsed = _parse_response(response.content)
-    raw_components = parsed.get("affected_components", []) if isinstance(parsed, dict) else []
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    raw_components = parsed.get("affected_components", []) or []
+    raw_e2e_plans = parsed.get("e2e_test_plans", []) or []
 
     components: list[dict] = []
     for c in raw_components:
@@ -190,8 +236,19 @@ async def vanilla_claude_target(inputs: dict) -> dict:
             "impact_summary": c.get("impact_summary", ""),
             "risks": c.get("risks", []) or [],
             "confidence": "low",
-            "unit_tests": [],
-            "integration_tests": [],
+            "unit_tests": c.get("unit_tests", []) or [],
+            "integration_tests": c.get("integration_tests", []) or [],
+        })
+
+    e2e_plans: list[dict] = []
+    for p in raw_e2e_plans:
+        if not isinstance(p, dict):
+            continue
+        e2e_plans.append({
+            "process": p.get("process", ""),
+            "scenario": p.get("scenario", ""),
+            "steps": p.get("steps", []) or [],
+            "priority": p.get("priority", "LOW"),
         })
 
     output: dict[str, Any] = {
@@ -201,10 +258,10 @@ async def vanilla_claude_target(inputs: dict) -> dict:
         "checkpoints_hit": [],
         "unit_intermediate": [],
         "path_taken": "vanilla",
-        "e2e_test_plans": [],
+        "e2e_test_plans": e2e_plans,
         "agent_steps": 0,
         "pr_title": pr["title"],
-        "pr_summary": parsed.get("pr_summary", "") if isinstance(parsed, dict) else "",
+        "pr_summary": parsed.get("pr_summary", ""),
     }
 
     if not components:
