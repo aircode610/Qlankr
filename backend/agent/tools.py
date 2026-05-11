@@ -123,9 +123,10 @@ JIRA_TOOL_ALIASES: dict[str, str] = {
 }
 
 NOTION_TOOL_ALIASES: dict[str, str] = {
-    "search": "notion_search",
-    "get_page": "notion_get_page",
-    "get_database": "notion_get_database",
+    # @notionhq/notion-mcp-server uses OpenAPI-style naming (API-*)
+    "API-post-search": "notion_search",
+    "API-retrieve-a-page": "notion_get_page",
+    "API-retrieve-a-database": "notion_get_database",
 }
 
 CONFLUENCE_TOOL_ALIASES: dict[str, str] = {
