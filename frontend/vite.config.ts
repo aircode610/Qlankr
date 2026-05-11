@@ -2,9 +2,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+/// <reference types="vitest" />
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  envDir: path.resolve(__dirname, '..'),  // read .env from the repo root
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
@@ -16,5 +18,9 @@ export default defineConfig({
     fs: {
       allow: ['..'],
     },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/setupTests.ts'],
   },
 });

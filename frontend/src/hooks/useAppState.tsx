@@ -1,8 +1,9 @@
 import { createContext, useContext, useMemo, ReactNode } from 'react';
 import { GraphStateProvider, useGraphState } from './app-state/graph';
 import type { PipelineProgress } from 'qlankr-shared';
-import type { AnalysisStage, AnalysisState, CheckpointData, AnalyzeResult, TestRunSummary, TestResult } from '../services/types';
-import { useState, useCallback } from 'react';
+import type { AnalysisState } from '../services/types';
+import type { ProjectDetail } from '../services/api';
+import { useState } from 'react';
 
 /** App state context — combines graph state + Qlankr analysis state */
 interface AppStateContextValue {
@@ -20,9 +21,17 @@ interface AppStateContextValue {
   highlightedNodeIds: ReturnType<typeof useGraphState>['highlightedNodeIds'];
   setHighlightedNodeIds: ReturnType<typeof useGraphState>['setHighlightedNodeIds'];
 
-  // Repo indexing
+  // Current project (replaces repoUrl)
+  currentProject: ProjectDetail | null;
+  setCurrentProject: (p: ProjectDetail | null) => void;
+
+  // Backward-compat shim for LegacyApp.tsx. repoUrl is derived from
+  // currentProject; setRepoUrl is a no-op because the project is now
+  // selected via routing (/projects/:id), not by mutating state.
   repoUrl: string | null;
   setRepoUrl: (url: string | null) => void;
+
+  // Repo indexing
   indexing: boolean;
   setIndexing: (v: boolean) => void;
   indexed: boolean;
@@ -46,8 +55,10 @@ const AppStateContext = createContext<AppStateContextValue | null>(null);
 const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const graphState = useGraphState();
 
+  // Current project
+  const [currentProject, setCurrentProject] = useState<ProjectDetail | null>(null);
+
   // Repo indexing
-  const [repoUrl, setRepoUrl] = useState<string | null>(null);
   const [indexing, setIndexing] = useState(false);
   const [indexed, setIndexed] = useState(false);
   const [indexMessages, setIndexMessages] = useState<Array<{ stage: string; summary: string }>>([]);
@@ -76,7 +87,9 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
   const value = useMemo<AppStateContextValue>(
     () => ({
       ...graphState,
-      repoUrl, setRepoUrl,
+      currentProject, setCurrentProject,
+      repoUrl: currentProject?.repo_url ?? null,
+      setRepoUrl: () => { /* no-op: project is selected via routing now */ },
       indexing, setIndexing,
       indexed, setIndexed,
       indexMessages, setIndexMessages,
@@ -84,7 +97,7 @@ const AppStateProviderInner = ({ children }: { children: ReactNode }) => {
       analysisState, setAnalysisState,
       affectedFileIds, setAffectedFileIds,
     }),
-    [graphState, repoUrl, indexing, indexed, indexMessages, progress, analysisState, affectedFileIds],
+    [graphState, currentProject, indexing, indexed, indexMessages, progress, analysisState, affectedFileIds],
   );
 
   return <AppStateContext.Provider value={value}>{children}</AppStateContext.Provider>;

@@ -1,12 +1,13 @@
 import asyncio
 import json
 import os
-import pathlib
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 from typing import AsyncIterator
 from urllib.parse import urlparse
+from uuid import UUID
 
 from models import (
     ErrorEvent,
@@ -17,67 +18,9 @@ from models import (
     IndexDoneEvent,
     IndexStepEvent,
 )
+from projects import create_project, list_projects, parse_repo_url, update_status
+from graph_paths import graph_dir
 
-# In-memory registry: { "owner/repo": { "path": str, "repo_name": str, "graph": GraphData | None, "stats": dict } }
-_registry: dict[str, dict] = {}
-
-# Disk persistence — survives process restarts
-_REGISTRY_DIR = pathlib.Path.home() / ".qlankr"
-_REGISTRY_FILE = _REGISTRY_DIR / "registry.json"
-
-
-def _load_registry() -> None:
-    """Load persisted registry from disk on startup."""
-    if not _REGISTRY_FILE.exists():
-        return
-    try:
-        data = json.loads(_REGISTRY_FILE.read_text())
-        for key, entry in data.items():
-            clone_path = entry.get("path") or ""
-            _registry[key] = {
-                "path": clone_path if clone_path and os.path.isdir(clone_path) else None,
-                "repo_name": entry.get("repo_name", ""),
-                "graph": None,  # re-fetched lazily from GitNexus MCP
-                "stats": entry.get("stats", {}),
-            }
-        print(f"[indexer] loaded {len(_registry)} repos from registry", flush=True)
-    except Exception as e:
-        print(f"[indexer] failed to load registry: {e}", flush=True)
-
-
-def _save_registry() -> None:
-    """Persist registry metadata to disk (excludes graph data — too large)."""
-    try:
-        _REGISTRY_DIR.mkdir(parents=True, exist_ok=True)
-        serializable = {
-            key: {
-                "path": entry.get("path"),
-                "repo_name": entry.get("repo_name"),
-                "stats": entry.get("stats", {}),
-            }
-            for key, entry in _registry.items()
-        }
-        _REGISTRY_FILE.write_text(json.dumps(serializable, indent=2))
-    except Exception as e:
-        print(f"[indexer] failed to save registry: {e}", flush=True)
-
-
-def list_indexed_repos() -> list[dict]:
-    """Return metadata for all repos that have been indexed."""
-    result = []
-    for repo_key, entry in _registry.items():
-        stats = entry.get("stats", {})
-        result.append({
-            "repo": repo_key,
-            "files": stats.get("files", 0),
-            "clusters": stats.get("communities", 0),
-            "symbols": stats.get("nodes", 0),
-        })
-    return result
-
-
-# Load on module import
-_load_registry()
 
 _STAGE_KEYWORDS: list[tuple[str, str]] = [
     ("clone", "clone"),
@@ -96,6 +39,7 @@ _STAGE_KEYWORDS: list[tuple[str, str]] = [
 
 
 def _parse_owner_repo(repo_url: str) -> tuple[str, str]:
+    """Parse owner/repo from a GitHub URL. Raises ValueError on bad input."""
     path = urlparse(repo_url).path.strip("/")
     path = re.sub(r"\.git$", "", path)
     parts = path.split("/")
@@ -112,21 +56,56 @@ def _detect_stage(line: str) -> str:
     return "analyze"
 
 
+# ── Public per-user surface ───────────────────────────────────────────────────
+
+def list_indexed_repos(user_id: UUID) -> list[dict]:
+    """Return projects that finished indexing (have a repo URL + status='ready').
+    Used by the legacy IndexingPage's 'Recent repositories' picker — named-only
+    projects without a URL would crash that UI on click.
+    """
+    return [
+        p for p in list_projects(user_id)
+        if p.get("repo_url") and p.get("owner") and p.get("repo_name")
+        and p.get("index_status") == "ready"
+    ]
+
+
+def register_repo(user_id: UUID, repo_url: str) -> dict:
+    """Idempotent: returns existing project record or creates a new one."""
+    return create_project(user_id, repo_url=repo_url)
+
+
+def get_kuzu_path(user_id: UUID, owner: str, repo: str):
+    """Per-user-per-repo KuzuDB directory; created on first access."""
+    return graph_dir(user_id, owner, repo, ensure=True)
+
+
 def get_repo_name(owner_repo: str) -> str | None:
-    """Return the GitNexus-registered repo name for an indexed repo."""
-    entry = _registry.get(owner_repo)
-    return entry.get("repo_name") if entry else None
+    """Return the repo name portion of 'owner/repo', or None if not parseable.
+
+    Kept for backward compatibility with agent/agent.py. With the registry gone,
+    the repo name is simply the second component of the 'owner/repo' key.
+    """
+    parts = owner_repo.split("/", 1)
+    return parts[1] if len(parts) == 2 else None
 
 
-def get_clone_path(owner_repo: str) -> str | None:
-    """Return the absolute local path where the repo was cloned."""
-    entry = _registry.get(owner_repo)
-    return entry.get("path") if entry else None
+def get_clone_path(user_id: UUID, owner: str, repo: str) -> str | None:
+    """Return the local clone path stored in graph_stats, or None if not indexed."""
+    from projects import list_projects  # noqa: PLC0415 — avoid circular at module level
+    rows = list_projects(user_id)
+    for row in rows:
+        if row.get("owner") == owner and row.get("repo_name") == repo:
+            stats = row.get("graph_stats") or {}
+            return stats.get("clone_path")
+    return None
 
 
 async def index_repo(
+    user_id: UUID,
     repo_url: str,
 ) -> AsyncIterator[IndexStepEvent | IndexDoneEvent | ErrorEvent]:
+    """SSE-streaming indexing pipeline; updates project status as it progresses."""
     try:
         owner, repo = _parse_owner_repo(repo_url)
     except ValueError as e:
@@ -136,6 +115,13 @@ async def index_repo(
     repo_key = f"{owner}/{repo}"
     tmp_dir = tempfile.mkdtemp(prefix="qlankr_")
     clone_path = os.path.join(tmp_dir, repo)
+
+    # Create or retrieve the project record
+    project = create_project(user_id, repo_url=repo_url)
+    project_id = project["id"]
+
+    # Mark as indexing
+    update_status(user_id, project_id, status="indexing")
 
     # ── Clone ──────────────────────────────────────────────────────────────────
     yield IndexStepEvent(stage="clone", summary=f"Cloning {repo_key}?")
@@ -147,9 +133,11 @@ async def index_repo(
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
+            update_status(user_id, project_id, status="failed", error=f"git clone failed: {stderr.decode().strip()}")
             yield ErrorEvent(message=f"git clone failed: {stderr.decode().strip()}")
             return
     except Exception as e:
+        update_status(user_id, project_id, status="failed", error=f"git clone error: {e}")
         yield ErrorEvent(message=f"git clone error: {e}")
         return
 
@@ -157,9 +145,10 @@ async def index_repo(
 
     # ── Analyze ────────────────────────────────────────────────────────────────
     yield IndexStepEvent(stage="analyze", summary="Running gitnexus analyze?")
+    indexed_marker_seen = False  # gitnexus emits "Repository indexed successfully" before any post-success crash
     try:
         proc = await asyncio.create_subprocess_exec(
-            "gitnexus", "analyze", clone_path,
+            "gitnexus", "analyze", clone_path, "--embeddings",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=clone_path,
@@ -171,33 +160,48 @@ async def index_repo(
                 break
             line = line_bytes.decode().strip()
             if line:
+                if "Repository indexed successfully" in line:
+                    indexed_marker_seen = True
                 yield IndexStepEvent(stage=_detect_stage(line), summary=line)
 
         await proc.wait()
         if proc.returncode != 0:
-            yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
-            return
+            # gitnexus occasionally crashes on shutdown (libc++abi mutex error) AFTER
+            # successfully writing to KuzuDB. If we observed the success marker in the
+            # output, trust it and continue — the data is in the DB.
+            if indexed_marker_seen:
+                yield IndexStepEvent(
+                    stage="analyze",
+                    summary=f"gitnexus exited {proc.returncode} after successful indexing; continuing",
+                )
+            else:
+                update_status(user_id, project_id, status="failed", error=f"gitnexus analyze exited with code {proc.returncode}")
+                yield ErrorEvent(message=f"gitnexus analyze exited with code {proc.returncode}")
+                return
     except FileNotFoundError:
+        update_status(user_id, project_id, status="failed", error="gitnexus not found")
         yield ErrorEvent(message="gitnexus not found ? is it installed?")
         return
     except Exception as e:
+        update_status(user_id, project_id, status="failed", error=f"gitnexus analyze error: {e}")
         yield ErrorEvent(message=f"gitnexus analyze error: {e}")
         return
-
-    # Register before fetching graph (so get_repo_name works in agent during analysis)
-    _registry[repo_key] = {
-        "path": clone_path,
-        "repo_name": repo,
-        "graph": None,
-        "stats": {},
-    }
 
     # ── Fetch stats + graph via MCP ────────────────────────────────────────────
     yield IndexStepEvent(stage="analyze", summary="Fetching graph data from GitNexus?")
     stats, graph = await _fetch_stats_and_graph(repo)
-    _registry[repo_key]["graph"] = graph
-    _registry[repo_key]["stats"] = stats
-    _save_registry()
+
+    # Store clone_path in graph_stats so get_clone_path can find it later
+    stats_with_path = {**stats, "clone_path": clone_path}
+
+    now = datetime.now(timezone.utc).isoformat()
+    update_status(
+        user_id,
+        project_id,
+        status="ready",
+        stats=stats_with_path,
+        last_indexed_at=now,
+    )
 
     yield IndexDoneEvent(
         repo=repo_key,
@@ -207,17 +211,21 @@ async def index_repo(
     )
 
 
-async def get_graph_data(owner: str, repo: str) -> GraphData:
-    """Return cached graph data for an indexed repo."""
-    repo_key = f"{owner}/{repo}"
-    entry = _registry.get(repo_key)
-    if entry is None:
+async def get_graph_data(user_id: UUID, owner: str, repo: str) -> GraphData:
+    """Query the user's GitNexus MCP for graph nodes/edges for this repo."""
+    # We fetch live from GitNexus (no in-memory cache) to keep things stateless.
+    # If the project doesn't exist for this user, return empty graph.
+    rows = list_projects(user_id)
+    project = next(
+        (r for r in rows if r.get("owner") == owner and r.get("repo_name") == repo),
+        None,
+    )
+    if project is None:
         return GraphData(nodes=[], edges=[], clusters=[])
-    if entry.get("graph") is None:
-        repo_name = entry.get("repo_name", repo)
-        _, graph = await _fetch_stats_and_graph(repo_name)
-        entry["graph"] = graph
-    return entry["graph"]  # type: ignore[return-value]
+
+    repo_name = project.get("repo_name", repo)
+    _, graph = await _fetch_stats_and_graph(repo_name)
+    return graph
 
 
 async def _fetch_stats_and_graph(repo_name: str) -> tuple[dict, GraphData]:
@@ -528,12 +536,14 @@ def _split_row(line: str) -> list[str]:
 # ── Standalone runner ─────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m indexer <repo_url>")
+    import uuid as _uuid_mod
+    if len(sys.argv) < 3:
+        print("Usage: python -m indexer <user_id> <repo_url>")
         sys.exit(1)
 
     async def _main() -> None:
-        async for event in index_repo(sys.argv[1]):
+        uid = _uuid_mod.UUID(sys.argv[1])
+        async for event in index_repo(uid, sys.argv[2]):
             print(event.model_dump_json())
 
     asyncio.run(_main())

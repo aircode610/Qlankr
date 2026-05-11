@@ -9,6 +9,10 @@ interface IndexingPageProps {
   indexed: boolean;
   indexMessages: Array<{ stage: string; summary: string }>;
   error: string | null;
+  /** Hide the "Recent repositories" picker. Use when this IndexingPage is
+   *  scoped to a specific project — switching repos via the picker no longer
+   *  makes sense since the route locks the project context. */
+  hideCachedPicker?: boolean;
 }
 
 export const IndexingPage = ({
@@ -18,6 +22,7 @@ export const IndexingPage = ({
   indexed,
   indexMessages,
   error,
+  hideCachedPicker = false,
 }: IndexingPageProps) => {
   const [url, setUrl] = useState('');
   const [cachedRepos, setCachedRepos] = useState<IndexedRepoInfo[]>([]);
@@ -27,12 +32,13 @@ export const IndexingPage = ({
 
   const isValidUrl = /github\.com\/[^/]+\/[^/]+/.test(url);
 
-  // Fetch cached repos on mount
+  // Fetch cached repos on mount (skipped when scoped to a single project)
   useEffect(() => {
+    if (hideCachedPicker) return;
     getIndexedRepos()
       .then(setCachedRepos)
       .catch(() => {/* backend may not be ready yet */});
-  }, []);
+  }, [hideCachedPicker]);
 
   useEffect(() => {
     logBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -81,7 +87,7 @@ export const IndexingPage = ({
         </div>
 
         {/* Cached repos */}
-        {cachedRepos.length > 0 && (
+        {!hideCachedPicker && cachedRepos.length > 0 && (
           <div className="flex flex-col gap-2">
             <p className="text-xs font-medium tracking-wide text-text-secondary uppercase">Recent repositories</p>
             <div className="flex flex-col gap-1.5">
