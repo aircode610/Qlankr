@@ -72,9 +72,21 @@ def triage_accuracy(outputs: dict, reference_outputs: dict = None) -> dict:
         },
     ]
 
+    # 5th check: severity matches expected (only when reference provides it)
+    expected_severity = (reference_outputs or {}).get("expected_severity", "")
+    if expected_severity:
+        details.append({
+            "check": f"severity matches expected ({expected_severity})",
+            "passed": severity == expected_severity,
+            "value": f"got '{severity}', expected '{expected_severity}'",
+        })
+        total_checks = 5
+    else:
+        total_checks = 4  # backwards compatible when no reference
+
     passed = [d for d in details if d["passed"]]
     failed = [d for d in details if not d["passed"]]
-    score = len(passed) / len(details)
+    score = len(passed) / total_checks
     comment = "all checks passed" if not failed else f"failed: {', '.join(d['check'] for d in failed)}"
     return {"key": "triage_accuracy", "score": score, "comment": comment, "details": details}
 
@@ -462,6 +474,77 @@ def graceful_degradation(outputs: dict) -> dict:
         comment = "report produced but external sources had results — degradation not fully tested"
 
     return {"key": "graceful_degradation", "score": score, "comment": comment, "details": details}
+
+
+def keyword_recall(outputs: dict, reference_outputs: dict = None) -> dict:
+    """Deterministic: fraction of expected root cause keywords present in root_cause text."""
+    root_cause = outputs.get("bug_report", {}).get("root_cause", "").lower()
+    keywords = (reference_outputs or {}).get("expected_root_cause_keywords", [])
+
+    if not keywords:
+        return {"key": "keyword_recall", "score": 1.0, "comment": "no reference keywords", "details": []}
+
+    details = []
+    for kw in keywords:
+        hit = kw.lower() in root_cause
+        details.append({
+            "check": f"keyword '{kw}' present in root_cause",
+            "passed": hit,
+            "value": "found" if hit else "missing",
+        })
+
+    hits = [d for d in details if d["passed"]]
+    score = len(hits) / len(details)
+    comment = (
+        f"{len(hits)}/{len(details)} keywords found"
+        if hits else "no expected keywords found in root_cause"
+    )
+    return {"key": "keyword_recall", "score": score, "comment": comment, "details": details}
+
+
+def _normalize_path(path: str) -> str:
+    """Strip leading directory components for fuzzy matching.
+    'src/timetable_gui.cpp' → 'timetable_gui.cpp'
+    """
+    return path.strip().lower().split("/")[-1]
+
+
+def affected_file_recall(outputs: dict, reference_outputs: dict = None) -> dict:
+    """Deterministic: fraction of expected files mentioned anywhere in the agent output."""
+    expected = (reference_outputs or {}).get("expected_affected_files", [])
+    if not expected:
+        return {"key": "affected_file_recall", "score": 1.0, "comment": "no reference files", "details": []}
+
+    # Collect files from mechanics.code_paths and bug_report.affected_components
+    found_files: set[str] = set()
+
+    mechanics = outputs.get("mechanics", {})
+    for path in mechanics.get("code_paths", []):
+        f = path.get("file", "") if isinstance(path, dict) else str(path)
+        found_files.add(_normalize_path(f))
+
+    report = outputs.get("bug_report", {})
+    for comp in report.get("affected_components", []):
+        if isinstance(comp, dict):
+            for f in comp.get("files", []):
+                found_files.add(_normalize_path(f))
+        else:
+            found_files.add(_normalize_path(str(comp)))
+
+    details = []
+    for expected_file in expected:
+        norm = _normalize_path(expected_file)
+        hit = any(norm in found or found.endswith(norm) for found in found_files)
+        details.append({
+            "check": f"'{expected_file}' in agent output",
+            "passed": hit,
+            "value": "found" if hit else "missing",
+        })
+
+    hits = [d for d in details if d["passed"]]
+    score = len(hits) / len(details)
+    comment = f"{len(hits)}/{len(details)} expected files found"
+    return {"key": "affected_file_recall", "score": score, "comment": comment, "details": details}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

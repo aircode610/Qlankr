@@ -60,6 +60,9 @@ from evals.bug_evaluators import (
     evidence_quality,
     tool_efficiency,
     graceful_degradation,
+    # New deterministic evaluators
+    keyword_recall,
+    affected_file_recall,
     # LLM judges
     root_cause_quality,
     report_coherence,
@@ -77,6 +80,8 @@ _DETERMINISTIC_EVALUATORS = [
     evidence_quality,
     tool_efficiency,
     graceful_degradation,
+    keyword_recall,
+    affected_file_recall,
 ]
 
 _JUDGE_EVALUATORS = [
