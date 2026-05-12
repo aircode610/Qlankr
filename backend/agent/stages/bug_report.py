@@ -43,6 +43,8 @@ async def report_node(state: "BugReproductionState", llm: Any = None, all_tools:
         affected_components: list = Field(default_factory=list)
         root_cause: str
         root_cause_detail: str | None = None
+        expected_behavior: str = "Not specified"
+        actual_behavior: str = "Not specified"
         reproduction_steps: list[dict] = Field(default_factory=list)
         prerequisites: list[str] = Field(default_factory=list)
         environment_requirements: list[str] = Field(default_factory=list)
@@ -61,6 +63,8 @@ async def report_node(state: "BugReproductionState", llm: Any = None, all_tools:
         confidence: str,
         affected_components: list = [],
         root_cause_detail: str | None = None,
+        expected_behavior: str = "Not specified",
+        actual_behavior: str = "Not specified",
         reproduction_steps: list = [],
         prerequisites: list = [],
         environment_requirements: list = [],
@@ -75,6 +79,8 @@ async def report_node(state: "BugReproductionState", llm: Any = None, all_tools:
             affected_components=affected_components,
             root_cause=root_cause,
             root_cause_detail=root_cause_detail,
+            expected_behavior=expected_behavior,
+            actual_behavior=actual_behavior,
             reproduction_steps=reproduction_steps,
             prerequisites=prerequisites,
             environment_requirements=environment_requirements,
@@ -98,6 +104,8 @@ async def report_node(state: "BugReproductionState", llm: Any = None, all_tools:
             "files_changed ([str]), risks ([str]), confidence (high|medium|low)), "
             "root_cause (ONE sentence, max 25 words, grounded in evidence), "
             "root_cause_detail (3-5 sentences expanding with file, call chain, or log evidence), "
+            "expected_behavior (ONE sentence: what should happen when following the reproduction steps), "
+            "actual_behavior (ONE sentence: what actually happens instead — the observable symptom), "
             "reproduction_steps (list of {step_number, action, expected_result}), "
             "prerequisites (list of setup condition strings), "
             "environment_requirements (list of platform/build requirement strings), "

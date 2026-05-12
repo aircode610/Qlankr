@@ -205,12 +205,19 @@ function EvidenceSection({ evidence }: { evidence: ResearchFindings }) {
           evidence.related_issues?.length > 0 ? evidence.related_issues.map((iss, i) => (
             <div key={i} className="rounded border border-border-subtle bg-elevated/60 px-3 py-2.5">
               <div className="flex items-start gap-2">
-                <span className="shrink-0 font-mono text-[10px] text-accent">{iss.key}</span>
-                <span className="flex-1 text-xs font-medium text-text-primary">{iss.summary}</span>
-                <span className="shrink-0 rounded border border-border-subtle bg-deep px-1.5 py-0.5 text-[10px] text-text-muted">
-                  {iss.status}
-                </span>
+                {iss.id && (
+                  <span className="shrink-0 font-mono text-[10px] text-accent">{iss.id}</span>
+                )}
+                <span className="flex-1 text-xs font-medium text-text-primary">{iss.title}</span>
+                {iss.status && (
+                  <span className="shrink-0 rounded border border-border-subtle bg-deep px-1.5 py-0.5 text-[10px] text-text-muted">
+                    {iss.status}
+                  </span>
+                )}
               </div>
+              {iss.relevance && (
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">{iss.relevance}</p>
+              )}
               {iss.url && (
                 <a href={iss.url} target="_blank" rel="noopener noreferrer"
                   className="mt-1 block font-mono text-[10px] text-accent hover:underline">
