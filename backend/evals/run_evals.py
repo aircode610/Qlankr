@@ -102,6 +102,24 @@ _E2E_EVALUATORS = [
     e2e_plan_structure,
 ]
 
+# Subset that applies to external baselines (e.g. vanilla Claude) — content
+# evaluators plus test-spec evaluators (vanilla also produces unit/integration/
+# e2e specs from the same single LLM call). Skips Qlankr-machinery metrics
+# (tool_coverage, gitnexus_usage, pipeline_progression, confidence_calibration,
+# no_crash) that don't apply to a tool-less baseline.
+_BASELINE_EVALUATORS = [
+    output_completeness,
+    component_count,
+    component_matching,
+    risk_quality,
+    groundedness,
+    unit_test_structure,
+    unit_test_quality,
+    integration_test_structure,
+    integration_test_quality,
+    e2e_plan_structure,
+]
+
 
 # ── Suite definitions ─────────────────────────────────────────────────────────
 
@@ -133,26 +151,38 @@ async def run_suite(
     suite_name: str,
     dataset_name: str,
     max_concurrency: int = 2,
+    target_name: str = "qlankr",
 ) -> None:
-    """Run a single suite against a single dataset."""
+    """Run a single suite against a single dataset for the chosen target system."""
     suite = SUITES[suite_name]
-    experiment_name = f"{suite['experiment_prefix']}-{dataset_name}"
+
+    if target_name == "vanilla":
+        from evals.baselines.vanilla_claude_target import vanilla_claude_target
+        target = vanilla_claude_target
+        evaluators = _BASELINE_EVALUATORS
+        experiment_name = f"vanilla-{dataset_name}"
+    else:
+        target = suite["target"]
+        evaluators = suite["evaluators"]
+        experiment_name = f"{suite['experiment_prefix']}-{dataset_name}"
 
     print(f"\n{'='*60}")
+    print(f"Target:  {target_name}")
     print(f"Suite:   {suite_name} — {suite['description']}")
     print(f"Dataset: {dataset_name} ({DATASETS[dataset_name]})")
     print(f"Experiment: {experiment_name}")
     print(f"{'='*60}")
 
     results = await aevaluate(
-        suite["target"],
+        target,
         data=DATASETS[dataset_name],
-        evaluators=suite["evaluators"],
+        evaluators=evaluators,
         experiment_prefix=experiment_name,
         max_concurrency=max_concurrency,
         metadata={
             "suite": suite_name,
             "dataset": dataset_name,
+            "target": target_name,
         },
     )
 
@@ -181,10 +211,11 @@ async def run_all(
     suites: list[str],
     datasets: list[str],
     max_concurrency: int = 2,
+    target_name: str = "qlankr",
 ) -> None:
     """Run the selected suites × datasets combinations."""
     tasks = [
-        run_suite(suite, dataset, max_concurrency)
+        run_suite(suite, dataset, max_concurrency, target_name)
         for suite in suites
         for dataset in datasets
     ]
@@ -217,38 +248,69 @@ def main() -> None:
         action="store_true",
         help="Skip LLM-as-judge evaluators in the bug suite (faster, no API cost).",
     )
+    parser.add_argument(
+        "--target",
+        choices=["qlankr", "vanilla"],
+        default="qlankr",
+        help=(
+            "Which system to evaluate (default: qlankr). "
+            "'vanilla' runs Claude Sonnet 4.6 on just the PR diff — no tools, no "
+            "knowledge graph — as a baseline to measure Qlankr's pipeline value-add."
+        ),
+    )
     args = parser.parse_args()
 
     client = Client()
-    existing = {ds.name for ds in client.list_datasets()}
 
     run_pr_suites = args.suite in ("integration", "e2e", "all")
-    run_bug_suite = args.suite in ("bug", "all")
+    run_bug_suite = args.suite in ("bug", "all") and args.target == "qlankr"
+
+    def _dataset_exists(name: str) -> bool:
+        # Use read_dataset(dataset_name=...) rather than list_datasets() —
+        # list_datasets returns empty for some PATs depending on workspace
+        # scope, but read_dataset works on direct name lookup.
+        try:
+            client.read_dataset(dataset_name=name)
+            return True
+        except Exception:
+            return False
 
     # ── PR analysis suites ────────────────────────────────────────────────────
     if run_pr_suites:
-        pr_suite_names = [s for s in SUITES if args.suite == "all" or s == args.suite]
+        pr_suite_names = [
+            s for s in SUITES
+            if args.suite == "all" or s == args.suite
+        ]
         datasets = list(DATASETS.keys()) if args.dataset == "all" else [args.dataset]
 
-        missing = [DATASETS[d] for d in datasets if DATASETS[d] not in existing]
+        missing = [DATASETS[d] for d in datasets if not _dataset_exists(DATASETS[d])]
         if missing:
             print(f"ERROR: These datasets don't exist in LangSmith: {missing}")
-            print("Run first:  cd backend && python -m evals.create_dataset")
+            print("Run first:  cd backend && python3 -m evals.create_dataset")
             sys.exit(1)
 
+        # Vanilla baseline: collapse to a single suite pass — vanilla has no
+        # integration/e2e split and produces unit + integration + e2e specs
+        # from one LLM call.
+        if args.target == "vanilla":
+            pr_suite_names = ["integration"]
+
+        print(f"Target:            {args.target}")
         print(f"Running PR suites: {pr_suite_names}")
         print(f"On datasets:       {datasets}")
-        asyncio.run(run_all(pr_suite_names, datasets, args.concurrency))
+        asyncio.run(run_all(pr_suite_names, datasets, args.concurrency, args.target))
 
     # ── Bug reproduction suite ────────────────────────────────────────────────
+    # Vanilla baseline doesn't apply to bug reproduction — skip silently
+    # when --target vanilla is combined with --suite all.
     if run_bug_suite:
         bug_dataset = "qlankr-eval-bugs"
-        if bug_dataset not in existing:
+        if not _dataset_exists(bug_dataset):
             print(f"ERROR: Dataset '{bug_dataset}' not found in LangSmith.")
-            print("Run first:  cd backend && python -m evals.create_dataset")
+            print("Run first:  cd backend && python3 -m evals.create_dataset")
             sys.exit(1)
 
-        # Bug pipeline is expensive — use concurrency=1 unless user explicitly raised it
+        # Bug pipeline is expensive — default to concurrency=1 unless raised.
         bug_concurrency = 1 if args.concurrency == 2 else args.concurrency
         asyncio.run(_run_bug_eval(
             dataset_name=bug_dataset,

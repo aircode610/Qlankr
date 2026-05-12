@@ -24,8 +24,56 @@ from collections import Counter
 import httpx
 from langchain_anthropic import ChatAnthropic
 
-# Cache PR diffs per URL to avoid redundant fetches across experiments
-_diff_cache: dict[str, list[dict]] = {}
+# ── PR diff fetcher (shared by diff-aware judges) ─────────────────────────────
+# Module-level cache so the same PR isn't fetched once per evaluator. Keyed by
+# pr_url, value is the diff text (or None if the fetch failed).
+_PR_URL_RE = re.compile(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)")
+_DIFF_CACHE: dict[str, str | None] = {}
+_MAX_DIFF_CHARS = 80_000  # mirrors vanilla_claude_target._MAX_DIFF_CHARS
+
+
+async def _fetch_pr_diff(pr_url: str) -> str | None:
+    """Fetch the unified diff for a PR. Caches per URL. Returns None on failure.
+
+    Diff is truncated at 80k chars so very large PRs don't blow the judge's
+    context window — a truncation marker is appended.
+    """
+    if pr_url in _DIFF_CACHE:
+        return _DIFF_CACHE[pr_url]
+
+    m = _PR_URL_RE.search(pr_url)
+    if not m:
+        _DIFF_CACHE[pr_url] = None
+        return None
+    owner, repo, num = m.groups()
+
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
+        _DIFF_CACHE[pr_url] = None
+        return None
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3.diff",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{num}"
+
+    try:
+        async with httpx.AsyncClient(headers=headers, timeout=30.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            diff = resp.text
+    except Exception:
+        _DIFF_CACHE[pr_url] = None
+        return None
+
+    if len(diff) > _MAX_DIFF_CHARS:
+        omitted = len(diff) - _MAX_DIFF_CHARS
+        diff = diff[:_MAX_DIFF_CHARS] + f"\n\n... [diff truncated — {omitted} chars omitted]"
+
+    _DIFF_CACHE[pr_url] = diff
+    return diff
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 1. STRUCTURAL EVALUATORS (deterministic)
@@ -545,7 +593,13 @@ Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
 
 
 async def unit_test_quality(inputs: dict, outputs: dict) -> dict:
-    """LLM judge: are the generated unit test specs useful and actionable?"""
+    """LLM judge: are the generated unit test specs grounded in the PR diff?
+
+    Fetches the actual PR diff so the judge can verify test targets reference
+    real symbols in the changed code, rather than relying on stylistic vibes.
+    Falls back to score: None when the diff is unavailable (no token, network
+    failure, etc.) — better than scoring blind.
+    """
     all_specs = []
     for c in outputs.get("affected_components", []):
         all_specs.extend(c.get("unit_tests", []))
@@ -556,24 +610,39 @@ async def unit_test_quality(inputs: dict, outputs: dict) -> dict:
     if not all_specs:
         return {"key": "unit_test_quality", "score": 0.0, "comment": "No unit test specs"}
 
+    diff = await _fetch_pr_diff(inputs["pr_url"])
+    if diff is None:
+        return {"key": "unit_test_quality", "score": None, "comment": "diff unavailable"}
+
     # Limit to first 10 specs to keep judge cost reasonable
     sample = all_specs[:10]
 
-    prompt = f"""Evaluate the quality of these unit test specifications for a PR analysis.
+    prompt = f"""Evaluate whether these unit test specifications are grounded in the actual PR diff.
 
 PR URL: {inputs['pr_url']}
+
+PR diff:
+```
+{diff}
+```
 
 Unit test specs (showing {len(sample)} of {len(all_specs)}):
 {json.dumps(sample, indent=2, default=str)}
 
-Score 0.0 to 1.0:
-- Are test targets specific real symbols (not vague like "the function")?
-- Do test cases cover meaningful scenarios (happy path, edge cases, error cases)?
-- Are the expected outcomes concrete and verifiable?
-- Are mocks_needed appropriate (mocking external deps, not internal logic)?
-- Are priorities reasonable (high for critical paths, low for utilities)?
+Score 0.0 to 1.0 based on:
+- Does each `target` field name a symbol (function, method, class) that actually appears in the diff above? Vague targets like "the function" or symbols not in the diff are ungrounded.
+- Do the `test_cases` describe behavior that the diff actually changes? A test for "valid login" on a diff that only touches password reset is ungrounded.
+- Are the `expected` outcomes concrete and verifiable from the change shown?
+- Are `mocks_needed` appropriate — mocking external deps the diff references, not invented dependencies?
+- Are priorities reasonable given what the diff changes (high for hot paths actually modified, low for trivial helpers)?
 
-Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
+Score guide:
+- 1.0 = every target maps to a real symbol in the diff; test cases cover real changed behavior
+- 0.7 = mostly grounded, one or two specs extrapolate beyond the diff
+- 0.4 = mix of grounded and speculative; some targets aren't in the diff
+- 0.0 = targets fabricated, test cases describe code that isn't in the diff
+
+Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences referencing specific symbols from the diff>"}}"""
 
     response = await _judge.ainvoke([{"role": "user", "content": prompt}])
     result = _parse_judge_response(response.content)
@@ -585,7 +654,13 @@ Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
 
 
 async def integration_test_quality(inputs: dict, outputs: dict) -> dict:
-    """LLM judge: are integration test specs useful?"""
+    """LLM judge: are integration test specs grounded in the PR diff?
+
+    Fetches the actual diff so the judge can verify that integration_point
+    references and modules_involved correspond to paths the PR actually
+    touches (or paths reachable from them). Falls back to score: None when
+    the diff is unavailable.
+    """
     all_specs = []
     for c in outputs.get("affected_components", []):
         all_specs.extend(c.get("integration_tests", []))
@@ -596,23 +671,38 @@ async def integration_test_quality(inputs: dict, outputs: dict) -> dict:
             return {"key": "integration_test_quality", "score": 1.0, "comment": "N/A"}
         return {"key": "integration_test_quality", "score": 0.0, "comment": "No specs"}
 
+    diff = await _fetch_pr_diff(inputs["pr_url"])
+    if diff is None:
+        return {"key": "integration_test_quality", "score": None, "comment": "diff unavailable"}
+
     sample = all_specs[:10]
 
-    prompt = f"""Evaluate the quality of these integration test specifications.
+    prompt = f"""Evaluate whether these integration test specifications are grounded in the actual PR diff.
 
 PR URL: {inputs['pr_url']}
+
+PR diff:
+```
+{diff}
+```
 
 Integration test specs ({len(sample)} of {len(all_specs)}):
 {json.dumps(sample, indent=2, default=str)}
 
-Score 0.0 to 1.0:
-- Do integration points identify real cross-module boundaries?
-- Are the modules_involved correct (at least 2 distinct modules)?
-- Do test cases describe data/events that cross the boundary?
-- Is data_setup specific enough to reproduce the scenario?
-- Is risk_level appropriate (CRITICAL for hot paths, LOW for admin)?
+Score 0.0 to 1.0 based on:
+- Does each `integration_point` describe a boundary the diff actually crosses (e.g. a module call, an interface change, a serialization boundary visible in the changed code)?
+- Do the `modules_involved` reference paths/modules that appear in the diff's changed files? A spec involving modules not in the diff and not plausibly reachable from changed files is ungrounded. (Note: a module not in the diff CAN be valid if it is a downstream caller of the changed code — but the integration point itself should still be diff-anchored.)
+- Do `test_cases` describe data/events that cross the boundary the diff modifies?
+- Is `data_setup` specific to the scenario the diff enables/changes?
+- Is `risk_level` appropriate given the actual changes (CRITICAL only for changes to hot paths visible in the diff)?
 
-Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences>"}}"""
+Score guide:
+- 1.0 = every integration_point is anchored in the diff; modules_involved either appear in the diff or are plausibly reachable
+- 0.7 = mostly grounded, one or two extrapolations
+- 0.4 = mix of grounded and speculative; some modules referenced have no link to the diff
+- 0.0 = boundaries fabricated, modules unrelated to the change
+
+Return ONLY: {{"score": <float>, "reasoning": "<1-2 sentences referencing specific paths/symbols from the diff>"}}"""
 
     response = await _judge.ainvoke([{"role": "user", "content": prompt}])
     result = _parse_judge_response(response.content)
