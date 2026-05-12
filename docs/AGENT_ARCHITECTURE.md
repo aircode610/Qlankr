@@ -12,29 +12,37 @@ Qlankr is an AI QA assistant for game studios. It exposes two agentic pipelines 
 4. [Tool System (MCP)](#tool-system-mcp)
 5. [Prompts](#prompts)
 6. [Session & State Management](#session--state-management)
-7. [API Endpoints](#api-endpoints)
-8. [Pre-fetch Layer](#pre-fetch-layer)
+7. [Data Persistence](#data-persistence)
+8. [API Endpoints](#api-endpoints)
+9. [Pre-fetch Layer](#pre-fetch-layer)
+10. [Evaluations](#evaluations)
 
 ---
 
 ## System Overview
 
 ```
-                          ┌──────────────────────────────────┐
-                          │          FastAPI (main.py)        │
-                          │   POST /analyze   POST /bug-report│
-                          └──────┬──────────────────┬────────┘
-                                 │                  │
-                    ┌────────────▼───┐     ┌────────▼────────┐
-                    │   agent.py     │     │   bug_agent.py   │
-                    │ Impact Graph   │     │ Bug Repro Graph  │
-                    └────────┬───────┘     └────────┬─────────┘
-                             │                      │
-           ┌─────────────────▼──────────────────────▼──────────────┐
-           │                   MCP Tool Layer (tools.py)            │
-           │  GitHub · GitNexus · Jira · Notion · Confluence ·     │
-           │  Grafana · Kibana · Postman · Sniffer                 │
-           └───────────────────────────────────────────────────────┘
+                          ┌──────────────────────────────────────────┐
+                          │             FastAPI (main.py)             │
+                          │  /analyze  /bug-report  /projects  /index │
+                          └──────┬───────────────────┬───────────────┘
+                                 │                   │
+                    ┌────────────▼───┐     ┌─────────▼────────┐
+                    │   agent.py     │     │   bug_agent.py    │
+                    │ Impact Graph   │     │ Bug Repro Graph   │
+                    └────────┬───────┘     └─────────┬─────────┘
+                             │                       │
+           ┌─────────────────▼───────────────────────▼──────────────┐
+           │                   MCP Tool Layer (tools.py)             │
+           │  GitHub · GitNexus · Jira · Notion · Confluence ·      │
+           │  Grafana · Kibana · Postman · Sniffer                   │
+           └─────────────────────────────────────────────────────────┘
+                             │
+           ┌─────────────────▼───────────────────────────────────────┐
+           │             Supabase (db.py / auth.py)                   │
+           │  profiles · projects · pr_analyses · bug_reports ·      │
+           │  user_credentials   (all tables RLS-isolated per user)  │
+           └─────────────────────────────────────────────────────────┘
 ```
 
 **Key design decisions:**
@@ -44,6 +52,7 @@ Qlankr is an AI QA assistant for game studios. It exposes two agentic pipelines 
 - **MCP (Model Context Protocol)**: All external tools (GitHub, Jira, GitNexus, etc.) are MCP servers. Persistent stdio sessions are opened once per pipeline run and reused across all stages.
 - **SSE streaming**: Every tool call and stage transition is streamed to the frontend as Server-Sent Events.
 - **Two LLM tiers**: Heavy reasoning stages use `claude-sonnet-4-6`; lightweight stages (triage, report synthesis) use `claude-haiku-4-5` (~37x cheaper).
+- **Supabase for persistence**: User-scoped Postgres tables with row-level security. Auth via ES256 JWTs (asymmetric signing, JWKS-verified).
 
 ---
 
@@ -221,7 +230,7 @@ gather ──► unit_tests ──► checkpoint_unit ──┐
 
 #### Submit Node (`agent.py:submit_node`)
 
-Terminal node. Sets `current_stage = "done"`. The graph runner reads `affected_components` and `e2e_test_plans` from final state and emits a `ResultEvent`.
+Terminal node. Sets `current_stage = "done"`. The graph runner reads `affected_components` and `e2e_test_plans` from final state and emits a `ResultEvent`. The run is persisted to `pr_analyses` in Supabase.
 
 ---
 
@@ -245,7 +254,7 @@ triage ──► mechanics_analysis ──► checkpoint_mechanics ──┐
                                                       research ──► checkpoint_research ──┐
                                                                                          │
                                                                          ┌───────────────┤
-                                                                         │ (add_context)  │ (approve)
+                                                                         │ (add_context) │ (approve)
                                                                          ▼               ▼
                                                                       research    report_generation
                                                                                          │
@@ -377,7 +386,7 @@ triage ──► mechanics_analysis ──► checkpoint_mechanics ──┐
 3. Optionally push to Jira (create or update)
 4. Call `submit_report`
 
-**Output**: Populates `bug_report` — the final `BugReport` model with all fields.
+**Output**: Populates `bug_report` — the final `BugReport` model. The run is persisted to `bug_reports` in Supabase.
 
 **Final `BugReport` schema**:
 ```json
@@ -541,19 +550,67 @@ Session(
 
 **API**: `create_session()`, `get_session()`, `update_session()`
 
-### Persistence (Supabase)
-
-Optional persistence to Supabase tables:
-- `pr_analyses` — Impact analysis runs
-- `bug_reports` — Bug reproduction runs
-
 ### Graph Checkpointing
 
 Both graphs use `MemorySaver()` (LangGraph's in-memory checkpointer). The graph singleton ensures the same checkpointer instance is shared between `run_*` and `continue_*` calls, so interrupt/resume works correctly.
 
 ---
 
+## Data Persistence
+
+**File**: `db.py`
+
+All user data is persisted in Supabase Postgres with row-level security (RLS). The backend uses a `UserScoped` wrapper that injects the authenticated user's ID into every query, enforced at the database level.
+
+### Authentication (`auth.py`)
+
+JWTs are signed with ES256 (asymmetric). The backend verifies tokens by fetching the project's JWKS endpoint at startup — no shared secret required.
+
+```python
+# FastAPI dependency injected into all protected endpoints
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserRecord
+```
+
+### Database Tables
+
+| Table | Columns | Purpose |
+|---|---|---|
+| `profiles` | `id`, `user_id`, `created_at` | Auto-created on signup via trigger |
+| `projects` | `id`, `user_id`, `name`, `repo_url`, `owner`, `repo_name`, `index_status`, `graph_stats`, `last_indexed_at`, `index_error` | Project metadata and indexing state |
+| `pr_analyses` | `id`, `user_id`, `project_id`, `pr_number`, `pr_url`, `pr_title`, `status`, `final_result`, `failure_reason`, `created_at` | Saved PR analysis runs |
+| `bug_reports` | `id`, `user_id`, `project_id`, `bug_description`, `status`, `final_report`, `severity`, `failure_reason`, `completed_at`, `created_at` | Saved bug report runs |
+| `user_credentials` | `user_id`, `anthropic_api_key`, `github_token`, `jira`, `notion`, `confluence`, `grafana`, `kibana`, `postman` | Per-user integration credentials (override env vars) |
+
+### Migrations
+
+Run in order from `backend/migrations/`:
+
+1. `0001_initial_schema.sql` — all tables + RLS policies
+2. `0002_profile_trigger.sql` — auto-create profile on user insert
+3. `0003_project_names.sql` — add `name` column to projects
+
+---
+
 ## API Endpoints
+
+### Indexing & Graph
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/index` | Index a repository. SSE stream. |
+| `GET` | `/repos` | List indexed repositories for current user. |
+| `GET` | `/graph/{owner}/{repo}` | Fetch knowledge graph nodes/edges. |
+
+### Projects
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/projects` | List user projects. |
+| `POST` | `/projects` | Create a project. |
+| `GET` | `/projects/{id}` | Get project detail. |
+| `DELETE` | `/projects/{id}` | Delete a project. |
+| `GET` | `/projects/{id}/pr-analyses` | List PR analysis runs for a project. |
+| `GET` | `/projects/{id}/bug-reports` | List bug report runs for a project. |
 
 ### Impact Analysis
 
@@ -570,9 +627,9 @@ Both graphs use `MemorySaver()` (LangGraph's in-memory checkpointer). The graph 
 | `POST` | `/bug-report` | Start new bug analysis. SSE stream. |
 | `POST` | `/bug-report/{session_id}/continue` | Resume from checkpoint. SSE stream. |
 | `GET` | `/bug-report/{session_id}/status` | Get session status. |
-| `GET` | `/bug-report/{session_id}/export` | Export report as Markdown or PDF. |
+| `POST` | `/bug-report/{session_id}/export` | Export report as Markdown or PDF. |
 
-### Settings & Integrations
+### Settings & Credentials
 
 | Method | Path | Description |
 |---|---|---|
@@ -590,6 +647,7 @@ Both graphs use `MemorySaver()` (LangGraph's in-memory checkpointer). The graph 
 | `BugStageChangeEvent` | Bug | `{stage, summary}` — same for bug pipeline |
 | `CheckpointEvent` | Impact | `{session_id, stage_completed, interrupt_type, payload}` — paused for human input |
 | `BugCheckpointEvent` | Bug | Same structure for bug pipeline |
+| `ResearchProgressEvent` | Bug | `{source, finding_count, summary}` — evidence found per source |
 | `ResultEvent` | Impact | `{pr_title, pr_url, pr_summary, affected_components, e2e_test_plans, agent_steps}` |
 | `BugReportResultEvent` | Bug | `{session_id, report: BugReport, agent_steps, full_state}` |
 | `ErrorEvent` | Both | `{message}` |
@@ -608,3 +666,42 @@ Before either graph starts, `prefetch_context()` loads baseline data from GitNex
 Returns `{processes: [...], stats: {...}, changed_symbols: []}`. Always returns a valid dict — never raises.
 
 This data is injected into the initial state of both graphs and is available to all stages from the start.
+
+---
+
+## Evaluations
+
+**Files**: `evals/run_evals.py`, `evals/run_bug_evals.py`, `evals/evaluators.py`, `evals/bug_evaluators.py`
+
+Both pipelines have a LangSmith evaluation suite with deterministic checks and LLM-as-judge evaluators.
+
+### Datasets
+
+| Dataset | Examples | Tests |
+|---|---|---|
+| `qlankr-eval-indexed` | 1 | PR analysis — Qlankr repo, full GitNexus |
+| `qlankr-eval-github` | 7 | PR analysis — external repos, GitHub-only |
+| `qlankr-eval-bugs` | 5 | Bug reproduction — legacy examples |
+| `qlankr-eval-bugs-real` | 6 | Real bugs from OpenTTD, Cataclysm-DDA, osu!, Luanti |
+| `qlankr-eval-bugs-synthetic` | 6 | Adversarial examples targeting specific failure modes |
+
+### PR Analysis Evaluators (`evaluators.py`)
+
+**Structural** (free, no LLM): `output_completeness`, `component_count`, `unit_test_structure`, `integration_test_structure`, `e2e_plan_structure`
+
+**Tool usage**: `tool_coverage`, `tool_efficiency`, `gitnexus_usage`, `confidence_calibration`
+
+**Pipeline**: `pipeline_progression`, `no_crash`
+
+**LLM judges** (~$0.01/example): `surface_groundedness` (fetches real PR diff via GitHub API), `depth_groundedness` (reads tool transcripts), `risk_quality`, `component_matching`, `unit_test_quality`, `integration_test_quality`
+
+### Bug Reproduction Evaluators (`bug_evaluators.py`)
+
+**Deterministic**: `triage_accuracy`, `mechanics_grounding`, `reproduction_executability`, `bug_pipeline_health`, `research_coverage`, `report_completeness`, `report_actionability`, `evidence_quality`, `tool_efficiency`, `graceful_degradation`, `keyword_recall`, `affected_file_recall`
+
+**LLM judges**: `root_cause_quality` (semantic alignment with expected root cause), `report_coherence` (internal consistency + specificity), `reproduction_step_clarity` (are steps actually executable?)
+
+### Baselines (`evals/baselines/`)
+
+- **Vanilla Claude** (`vanilla_claude_target.py`): Runs structured QA plans directly against Claude without the pipeline. Benchmark lower bound.
+- **Claude Code** (`claude_code_target.py`): Runs full skill prompts without pipeline overhead. Fairer comparison target — isolates prompt quality from infrastructure.

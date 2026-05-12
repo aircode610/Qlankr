@@ -26,26 +26,29 @@ Connect a GitHub repository and paste a PR URL. Qlankr fetches the PR, runs it t
 - **Risk assessment** — what's likely to break and why, derived from code relationships in the knowledge graph
 - **Test suggestions** — unit tests to write for high-risk changed functions, integration tests for cross-module interactions, and E2E plans for user-facing scenarios
 
-The analysis is interactive. After each stage you can approve the output, add context, or ask the agent to dig deeper. You choose which workflow to pursue: unit+integration tests, or E2E planning.
+The analysis is interactive. After each stage you can approve the output, add context, or ask the agent to dig deeper. You choose which workflow to pursue: unit + integration tests, or E2E planning.
 
 ### Bug Reproduction
 
-Describe a bug in plain text. The agent runs a 7-stage pipeline:
+Describe a bug in plain text. The agent runs a 5-stage pipeline:
 
 1. **Triage** — classifies severity and identifies which components and game mechanics are involved
 2. **Mechanics analysis** — analyzes code paths, call graphs, and root cause hypotheses; you review before it proceeds
 3. **Reproduction planning** — generates step-by-step reproduction steps with environment requirements
-4. **Research** — aggregates evidence from logs (Grafana, Kibana), docs (Notion, Confluence), and tickets (Jira) in one place
-5. **Research checkpoint** — you review the evidence and can redirect before the final report
-6. **Report generation** — synthesizes everything into a structured developer-ready report with reproduction steps, affected components, log references, and severity classification
+4. **Research** — aggregates evidence from logs (Grafana, Kibana), docs (Notion, Confluence), and tickets (Jira) in one place; you review and can add context before the final report
+5. **Report generation** — synthesizes everything into a structured developer-ready report with reproduction steps, affected components, log references, and severity classification
 
-The final report can be exported as Markdown or PDF.
+The final report can be exported as Markdown or PDF, or pushed directly to Jira.
 
 ### Knowledge Graph
 
 Before running analysis, Qlankr indexes your repository into a queryable knowledge graph (powered by GitNexus and KuzuDB). The graph captures function-level relationships across your codebase: callers, callees, module boundaries, execution flows. The agent uses this graph — not just file diffs — to understand impact.
 
 The graph is visualized in the UI with Sigma.js and can be explored directly: click nodes, filter by depth, toggle edge types.
+
+### Projects & History
+
+Qlankr is organized around named projects. Each project maps to a GitHub repository. All PR analyses and bug reports are saved per project and can be replayed from the history view. Multiple users can share the same Qlankr instance with full data isolation via row-level security.
 
 ---
 
@@ -54,7 +57,7 @@ The graph is visualized in the UI with Sigma.js and can be explored directly: cl
 Qlankr is built for **QA engineers and QA leads at small indie game studios** (roughly 1–15 person teams) who:
 
 - Don't have a dedicated testing infrastructure team
-- Are doing QA manually across multiple tools — GitHub, Jira, Notion, Grafana, Kibana, Slack
+- Are doing QA manually across multiple tools — GitHub, Jira, Notion, Grafana, Kibana
 - Spend significant time on reproduction research rather than finding new bugs
 - Receive bug reports back from developers with "cannot reproduce" because the reports lacked enough context
 
@@ -67,10 +70,11 @@ If you're a developer who also handles QA, or a QA lead trying to improve report
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.12, FastAPI, Uvicorn |
-| Agent Engine | LangGraph, Claude (Anthropic SDK) |
+| Agent Engine | LangGraph StateGraphs, LangChain ReAct sub-agents, Claude (Anthropic SDK) |
 | Knowledge Graph | GitNexus (MCP server), KuzuDB |
 | GitHub Integration | GitHub MCP server |
-| External Tools | Jira MCP, Notion, Confluence, Grafana, Kibana |
+| External Tools | Jira MCP, Notion MCP, Confluence MCP, Grafana MCP, Kibana MCP, Postman MCP |
+| Authentication & DB | Supabase (Auth, Postgres, RLS) |
 | Frontend | React 18, TypeScript, Vite, Tailwind CSS 4 |
 | Graph Visualization | Sigma.js v3, Graphology |
 | Export | FPDF2 (Markdown → PDF) |
@@ -101,6 +105,7 @@ Sign up at https://supabase.com, create a project, and from **Project Settings �
 
 - `backend/migrations/0001_initial_schema.sql`
 - `backend/migrations/0002_profile_trigger.sql`
+- `backend/migrations/0003_project_names.sql`
 
 Confirm the five tables (`profiles`, `projects`, `pr_analyses`, `bug_reports`, `user_credentials`) appear in the Table Editor with RLS lock icons.
 
@@ -124,7 +129,7 @@ docker compose up
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
 
-Sign up via the frontend, then open **Settings** to add your Anthropic API key, GitHub token, and any integration credentials (Jira, Notion, Grafana, etc.) — these will eventually replace the env-var fallbacks.
+Sign up via the frontend, then open **Settings** to add your Anthropic API key, GitHub token, and any integration credentials (Jira, Notion, Grafana, etc.).
 
 ---
 
@@ -150,9 +155,9 @@ npm run dev             # Vite dev server on :5173
 
 ## Usage
 
-### Step 1 — Index your repository
+### Step 1 — Create a project and index your repository
 
-On first launch, enter your GitHub repository URL. Qlankr clones the repo, runs `gitnexus analyze`, and builds the knowledge graph. This takes a few minutes and is one-time per repository. Once done, the graph is visible in the UI and the repository is ready for analysis.
+After signing up, create a project and enter your GitHub repository URL. Qlankr clones the repo, runs `gitnexus analyze`, and builds the knowledge graph. This takes a few minutes and is one-time per repository. Once done, the graph is visible in the UI and the repository is ready for analysis.
 
 ### Step 2 — Analyze a pull request
 
@@ -164,11 +169,11 @@ Paste a GitHub PR URL into the Analyze panel. The agent will:
 - Ask you to review and approve before proceeding
 - Let you choose between integration tests or E2E planning for the next stage
 
-Each stage streams its reasoning live in the Agent Trace drawer so you can follow what it's doing and why.
+Each stage streams its reasoning live in the Agent Trace drawer so you can follow what it's doing and why. Completed runs are saved to the project history and can be replayed later.
 
 ### Step 3 — Reproduce a bug
 
-Switch to the Research view. Describe the bug — what happened, where, what you were doing, any attachments or Jira ticket references. The agent will run through triage, mechanics analysis, reproduction planning, and evidence research, pausing at two checkpoints for your review. The final output is a structured bug report ready to send to your dev team.
+Switch to the Bug tab. Describe the bug — what happened, where, what you were doing, any attachments or Jira ticket references. The agent will run through triage, mechanics analysis, reproduction planning, and evidence research, pausing at two checkpoints for your review. The final output is a structured bug report ready to send to your dev team or push directly to Jira.
 
 ### Step 4 — Configure integrations
 
@@ -185,16 +190,24 @@ Qlankr/
 ├── backend/
 │   ├── main.py                 # FastAPI entry point & all API endpoints
 │   ├── models.py               # Pydantic request/response/SSE models
+│   ├── db.py                   # Supabase client wrapper (user-scoped queries)
+│   ├── auth.py                 # JWT verification via JWKS (ES256)
+│   ├── projects.py             # Project CRUD & repo URL parsing
+│   ├── credentials.py          # Per-user integration credential storage
 │   ├── indexer.py              # Repo clone → GitNexus → graph pipeline
 │   ├── export.py               # Markdown & PDF export for bug reports
+│   ├── startup.py              # Lifecycle hooks (orphaned run cleanup)
+│   ├── graph_paths.py          # Filesystem layout for clones/graphs
 │   ├── agent/
 │   │   ├── agent.py            # LangGraph orchestration (PR analysis)
 │   │   ├── bug_agent.py        # LangGraph orchestration (bug reproduction)
-│   │   ├── tools.py            # MCP tool initialization, filtering, wrapping
+│   │   ├── tools.py            # MCP tool init, filtering, safety wrappers
 │   │   ├── tool_health.py      # Integration health checks & credential sync
-│   │   ├── prompts.py          # System prompts
-│   │   ├── sessions.py         # Session/checkpoint persistence
-│   │   ├── bug_run_registry.py # Active bug session registry
+│   │   ├── prompts.py          # All system prompts (PROMPT_VERSION="2.0")
+│   │   ├── sessions.py         # Session/checkpoint state management
+│   │   ├── prefetch.py         # Background MCP context pre-loading
+│   │   ├── sniffer.py          # HAR/pcap file parsing
+│   │   ├── bug_run_registry.py # Active bug session tracking
 │   │   └── stages/             # Per-stage sub-agents
 │   │       ├── gather.py           # PR context (GitHub MCP)
 │   │       ├── unit.py             # Unit test generation
@@ -205,25 +218,45 @@ Qlankr/
 │   │       ├── bug_reproduction.py # Reproduction step planning
 │   │       ├── bug_research.py     # Evidence from logs, docs, Jira, etc.
 │   │       └── bug_report.py       # Final report synthesis
-│   └── evals/                  # Evaluation suite
-├── frontend/
-│   └── src/
-│       ├── App.tsx
-│       ├── components/
-│       │   ├── GraphCanvas.tsx       # Sigma.js knowledge graph
-│       │   ├── PrAnalysisPanel.tsx   # PR analysis input
-│       │   ├── AgentTraceDrawer.tsx  # Live agent reasoning
-│       │   ├── TestPipelineResults.tsx
-│       │   ├── CheckpointDialog.tsx  # Human-in-the-loop approvals
-│       │   ├── BugCheckpointDialog.tsx
-│       │   ├── BugTraceDrawer.tsx
-│       │   ├── ResearchPanel.tsx     # Bug research findings
-│       │   ├── SettingsPanel.tsx     # Integration configuration
-│       │   └── Navbar.tsx
-│       ├── hooks/                # useAppState (Context API)
-│       └── services/             # API client (SSE), TypeScript types
-├── shared/                     # Shared TypeScript package (types, constants)
-├── specs/                      # Product specs & acceptance criteria
+│   ├── evals/                  # LangSmith evaluation suite
+│   │   ├── run_evals.py            # PR analysis evaluator runner
+│   │   ├── run_bug_evals.py        # Bug reproduction evaluator runner
+│   │   ├── evaluators.py           # Structural + LLM-as-judge evaluators
+│   │   ├── bug_evaluators.py       # Stage-specific bug evaluators
+│   │   ├── create_dataset.py       # LangSmith dataset seeding
+│   │   └── baselines/              # Claude Code + vanilla Claude baselines
+│   ├── migrations/             # Supabase SQL migrations (run in order)
+│   │   ├── 0001_initial_schema.sql
+│   │   ├── 0002_profile_trigger.sql
+│   │   └── 0003_project_names.sql
+│   └── mcp_servers/            # Custom MCP server implementations
+│       ├── grafana_server.py
+│       ├── kibana_server.py
+│       └── postman_server.py
+├── frontend/src/
+│   ├── App.tsx                 # Root routing (protected + public routes)
+│   ├── auth/                   # Supabase auth context & route guards
+│   ├── pages/
+│   │   ├── ProjectsListPage    # Project list & navigation
+│   │   ├── LegacyApp.tsx       # Main workspace (Graph/Analyze/Bug/Settings)
+│   │   ├── HistoryList.tsx     # Saved runs history
+│   │   ├── PrAnalysisReplay    # Replay a saved PR analysis
+│   │   └── BugReportReplay     # Replay a saved bug report
+│   ├── components/
+│   │   ├── GraphCanvas.tsx         # Sigma.js knowledge graph
+│   │   ├── PrAnalysisPanel         # PR analysis input
+│   │   ├── TestPipelineResults     # Impact analysis results
+│   │   ├── AgentTraceDrawer        # Live agent reasoning stream
+│   │   ├── CheckpointDialog        # Human-in-the-loop approvals
+│   │   ├── BugInputPanel           # Bug description form
+│   │   ├── BugReportView           # Final bug report display
+│   │   ├── BugTraceDrawer          # Live bug pipeline stream
+│   │   ├── BugCheckpointDialog     # Bug pipeline approvals
+│   │   ├── ResearchPanel           # Evidence tabs (Logs/Docs/Issues)
+│   │   └── SettingsPanel           # Integration credential configuration
+│   ├── hooks/                  # useAppState (Context API), useTheme
+│   └── services/               # API client (SSE), Supabase client, types
+├── specs/                      # Product specs & sprint reports
 └── docker-compose.yml
 ```
 
@@ -236,7 +269,19 @@ Qlankr/
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/index` | Index a repository (SSE stream) |
+| `GET` | `/repos` | List indexed repositories for current user |
 | `GET` | `/graph/{owner}/{repo}` | Fetch knowledge graph for visualization |
+
+### Projects
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/projects` | List user projects |
+| `POST` | `/projects` | Create a project |
+| `GET` | `/projects/{id}` | Get project detail |
+| `DELETE` | `/projects/{id}` | Delete a project |
+| `GET` | `/projects/{id}/pr-analyses` | List PR analysis runs for a project |
+| `GET` | `/projects/{id}/bug-reports` | List bug report runs for a project |
 
 ### PR Analysis
 
@@ -255,12 +300,14 @@ Qlankr/
 | `GET` | `/bug-report/{session_id}/status` | Check session status |
 | `POST` | `/bug-report/{session_id}/export` | Export report as Markdown or PDF |
 
-### Settings
+### Settings & Credentials
 
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/settings/integrations` | List integrations with health status |
-| `POST` | `/settings/integrations` | Update credentials and test connection |
+| `POST` | `/settings/integrations` | Update integration credentials |
+| `GET` | `/settings/credentials` | Check which credentials are configured |
+| `POST` | `/settings/credentials` | Update credentials |
 
 ### SSE Event Types
 
@@ -269,16 +316,53 @@ All streaming endpoints emit Server-Sent Events. Event types:
 | Event | When | Payload |
 |---|---|---|
 | `agent_step` | Each tool call in PR analysis | `{ tool, summary, stage }` |
-| `stage_change` | Stage transition | `{ stage, message }` |
-| `checkpoint` | Human approval needed | `{ type, message, options }` |
+| `stage_change` | Stage transition (PR analysis) | `{ stage, message }` |
+| `checkpoint` | Human approval needed (PR analysis) | `{ type, message, options }` |
 | `result` | PR analysis complete | Full `AnalyzeResponse` |
-| `bug_stage_change` | Bug pipeline stage transition | `{ stage, message }` |
-| `bug_checkpoint` | Bug workflow approval needed | `{ type, message, data }` |
-| `research_progress` | Evidence found during research | `{ source, status, findings }` |
+| `bug_stage_change` | Stage transition (bug pipeline) | `{ stage, message }` |
+| `bug_checkpoint` | Human approval needed (bug pipeline) | `{ type, message, data }` |
+| `research_progress` | Evidence found during research | `{ source, finding_count, summary }` |
 | `bug_result` | Bug report complete | Full `BugReport` |
 | `index_step` | Indexing progress | `{ message, progress }` |
 | `index_done` | Indexing complete | `{ graph }` |
 | `error` | Any failure | `{ message }` |
+
+---
+
+## Evaluations
+
+Qlankr ships a LangSmith-based evaluation suite covering both pipelines.
+
+### Datasets (seed with `python -m evals.create_dataset`)
+
+| Dataset | Examples | Tests |
+|---|---|---|
+| `qlankr-eval-indexed` | 1 | PR analysis on the Qlankr repo (full GitNexus) |
+| `qlankr-eval-github` | 7 | PR analysis on external repos (GitHub-only) |
+| `qlankr-eval-bugs` | 5 | Bug reproduction — legacy examples |
+| `qlankr-eval-bugs-real` | 6 | Real bugs from OpenTTD, Cataclysm-DDA, osu!, Luanti |
+| `qlankr-eval-bugs-synthetic` | 6 | Adversarial examples targeting specific failure modes |
+
+### Running Evals
+
+```bash
+cd backend
+
+# PR analysis — integration path, external repos
+.venv/bin/python -m evals.run_evals --suite integration --dataset github
+
+# PR analysis — E2E path
+.venv/bin/python -m evals.run_evals --suite e2e --dataset github
+
+# Bug reproduction — real bugs
+.venv/bin/python -m evals.run_bug_evals --dataset qlankr-eval-bugs-real
+
+# Bug reproduction — adversarial
+.venv/bin/python -m evals.run_bug_evals --dataset qlankr-eval-bugs-synthetic
+
+# Skip LLM judges (free, instant)
+.venv/bin/python -m evals.run_bug_evals --no-judges
+```
 
 ---
 
@@ -299,13 +383,45 @@ cd backend && ./test.sh
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | Claude API key |
-| `GITHUB_TOKEN` | Yes | GitHub PAT (`public_repo` scope minimum) |
-| `VITE_API_URL` | Yes | Backend URL seen by the frontend |
-| `LANGSMITH_API_KEY` | No | LangSmith tracing key |
-| `LANGSMITH_TRACING` | No | `true` to enable LangSmith tracing |
-| `LANGSMITH_ENDPOINT` | No | LangSmith API endpoint |
-| `LANGSMITH_PROJECT` | No | LangSmith project name (default: `qlankr`) |
-| `VITE_USE_MOCK_SSE` | No | `true` to stub SSE responses in frontend dev |
+### Required
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Claude API key |
+| `GITHUB_TOKEN` | GitHub PAT (`public_repo` scope minimum) |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_ANON_KEY` | Supabase publishable key (also used by backend) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase secret key (backend only — never expose to frontend) |
+| `VITE_SUPABASE_URL` | Supabase URL for the frontend |
+| `VITE_SUPABASE_ANON_KEY` | Supabase publishable key for the frontend |
+| `VITE_API_URL` | Backend URL seen by the frontend |
+
+### Optional — Observability
+
+| Variable | Description |
+|---|---|
+| `LANGSMITH_API_KEY` | LangSmith tracing key |
+| `LANGSMITH_TRACING` | `true` to enable LangSmith tracing |
+| `LANGSMITH_ENDPOINT` | LangSmith API endpoint |
+| `LANGSMITH_PROJECT` | LangSmith project name (default: `qlankr`) |
+
+### Optional — Integrations
+
+| Variable | Description |
+|---|---|
+| `JIRA_URL` | Jira instance URL |
+| `JIRA_API_TOKEN` | Jira API token |
+| `NOTION_API_KEY` | Notion integration token |
+| `CONFLUENCE_URL` | Confluence instance URL |
+| `CONFLUENCE_TOKEN` | Confluence API token |
+| `GRAFANA_URL` | Grafana instance URL |
+| `GRAFANA_API_KEY` | Grafana API key |
+| `KIBANA_URL` | Kibana instance URL |
+| `KIBANA_TOKEN` | Kibana API token |
+| `POSTMAN_API_KEY` | Postman API key |
+
+### Optional — Dev
+
+| Variable | Description |
+|---|---|
+| `VITE_USE_MOCK_SSE` | `true` to stub SSE responses in frontend development |
