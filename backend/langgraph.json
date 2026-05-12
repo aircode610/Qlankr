@@ -1,0 +1,11 @@
+{
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "impact_analysis": "./studio_graphs.py:impact_analysis_graph",
+    "bug_reproduction": "./studio_graphs.py:bug_reproduction_graph"
+  },
+  "env": "../.env",
+  "python_version": "3.11"
+}

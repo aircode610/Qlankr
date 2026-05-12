@@ -42,7 +42,7 @@ def triage_accuracy(outputs: dict, reference_outputs: dict = None) -> dict:
     """
     triage = outputs.get("triage", {})
     if not triage:
-        return {"key": "triage_accuracy", "score": 0.0, "comment": "triage dict missing", "details": []}
+        return {"key": "triage_accuracy", "score": 0.0, "comment": "triage dict missing", "metadata": {"details": []}}
 
     bug_category = triage.get("bug_category", "")
     severity = triage.get("severity", "")
@@ -88,7 +88,7 @@ def triage_accuracy(outputs: dict, reference_outputs: dict = None) -> dict:
     failed = [d for d in details if not d["passed"]]
     score = len(passed) / total_checks
     comment = "all checks passed" if not failed else f"failed: {', '.join(d['check'] for d in failed)}"
-    return {"key": "triage_accuracy", "score": score, "comment": comment, "details": details}
+    return {"key": "triage_accuracy", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def mechanics_grounding(outputs: dict) -> dict:
@@ -98,7 +98,7 @@ def mechanics_grounding(outputs: dict) -> dict:
     """
     mechanics = outputs.get("mechanics", {})
     if not mechanics:
-        return {"key": "mechanics_grounding", "score": 0.0, "comment": "mechanics dict missing", "details": []}
+        return {"key": "mechanics_grounding", "score": 0.0, "comment": "mechanics dict missing", "metadata": {"details": []}}
 
     code_paths = mechanics.get("code_paths", [])
     hypotheses = mechanics.get("root_cause_hypotheses", [])
@@ -139,7 +139,7 @@ def mechanics_grounding(outputs: dict) -> dict:
         "all checks passed" if not failing
         else f"failed: {', '.join(d['check'] for d in failing)}"
     )
-    return {"key": "mechanics_grounding", "score": score, "comment": comment, "details": details}
+    return {"key": "mechanics_grounding", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def reproduction_executability(outputs: dict) -> dict:
@@ -150,7 +150,7 @@ def reproduction_executability(outputs: dict) -> dict:
     """
     plan = outputs.get("reproduction_plan", {})
     if not plan:
-        return {"key": "reproduction_executability", "score": 0.0, "comment": "reproduction_plan missing", "details": []}
+        return {"key": "reproduction_executability", "score": 0.0, "comment": "reproduction_plan missing", "metadata": {"details": []}}
 
     steps = plan.get("steps", [])
     prerequisites = plan.get("prerequisites", [])
@@ -197,7 +197,7 @@ def reproduction_executability(outputs: dict) -> dict:
         "all checks passed" if not failing
         else f"failed: {', '.join(d['check'] for d in failing)}"
     )
-    return {"key": "reproduction_executability", "score": score, "comment": comment, "details": details}
+    return {"key": "reproduction_executability", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -235,7 +235,7 @@ def bug_pipeline_health(outputs: dict) -> dict:
     failed = [d for d in details if not d["passed"]]
     score = len(passed) / len(details)
     comment = "all stages completed" if not failed else f"missing: {', '.join(d['check'].split()[0] for d in failed)}"
-    return {"key": "bug_pipeline_health", "score": score, "comment": comment, "details": details}
+    return {"key": "bug_pipeline_health", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def research_coverage(outputs: dict) -> dict:
@@ -246,7 +246,7 @@ def research_coverage(outputs: dict) -> dict:
     """
     findings = outputs.get("research_findings", {})
     if not findings:
-        return {"key": "research_coverage", "score": 0.0, "comment": "research_findings missing", "details": []}
+        return {"key": "research_coverage", "score": 0.0, "comment": "research_findings missing", "metadata": {"details": []}}
 
     queried = findings.get("sources_queried", [])
     with_results = findings.get("sources_with_results", [])
@@ -275,7 +275,7 @@ def research_coverage(outputs: dict) -> dict:
         if queried
         else "no sources were queried"
     )
-    return {"key": "research_coverage", "score": score, "comment": comment, "details": details}
+    return {"key": "research_coverage", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def report_completeness(outputs: dict) -> dict:
@@ -285,7 +285,7 @@ def report_completeness(outputs: dict) -> dict:
     """
     report = outputs.get("bug_report", {})
     if not report:
-        return {"key": "report_completeness", "score": 0.0, "comment": "bug_report missing", "details": []}
+        return {"key": "report_completeness", "score": 0.0, "comment": "bug_report missing", "metadata": {"details": []}}
 
     required_fields = [
         ("title", lambda v: bool(v)),
@@ -312,7 +312,7 @@ def report_completeness(outputs: dict) -> dict:
     score = passed_count / len(details)
     failed = [d for d in details if not d["passed"]]
     comment = "all fields present" if not failed else f"failed: {', '.join(d['check'] for d in failed)}"
-    return {"key": "report_completeness", "score": score, "comment": comment, "details": details}
+    return {"key": "report_completeness", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def report_actionability(outputs: dict) -> dict:
@@ -323,7 +323,7 @@ def report_actionability(outputs: dict) -> dict:
     """
     report = outputs.get("bug_report", {})
     if not report:
-        return {"key": "report_actionability", "score": 0.0, "comment": "bug_report missing", "details": []}
+        return {"key": "report_actionability", "score": 0.0, "comment": "bug_report missing", "metadata": {"details": []}}
 
     recommendations = report.get("recommendations", [])
 
@@ -352,7 +352,7 @@ def report_actionability(outputs: dict) -> dict:
 
     failed = [d for d in details if not d["passed"]]
     comment = "all recommendations actionable" if not failed else f"failed: {', '.join(d['check'] for d in failed)}"
-    return {"key": "report_actionability", "score": score, "comment": comment, "details": details}
+    return {"key": "report_actionability", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def evidence_quality(outputs: dict) -> dict:
@@ -365,7 +365,7 @@ def evidence_quality(outputs: dict) -> dict:
     """
     report = outputs.get("bug_report", {})
     if not report:
-        return {"key": "evidence_quality", "score": 0.0, "comment": "bug_report missing", "details": []}
+        return {"key": "evidence_quality", "score": 0.0, "comment": "bug_report missing", "metadata": {"details": []}}
 
     evidence = report.get("evidence", {})
     research = outputs.get("research_findings", {})
@@ -396,7 +396,7 @@ def evidence_quality(outputs: dict) -> dict:
         if filled
         else "no evidence found in any category"
     )
-    return {"key": "evidence_quality", "score": score, "comment": comment, "details": details}
+    return {"key": "evidence_quality", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def tool_efficiency(outputs: dict) -> dict:
@@ -428,7 +428,7 @@ def tool_efficiency(outputs: dict) -> dict:
         if within_budget
         else f"over budget ({used}/{_TOTAL_BUDGET})"
     )
-    return {"key": "tool_efficiency", "score": round(score, 2), "comment": comment, "details": details}
+    return {"key": "tool_efficiency", "score": round(score, 2), "comment": comment, "metadata": {"details": details}}
 
 
 def graceful_degradation(outputs: dict) -> dict:
@@ -473,7 +473,7 @@ def graceful_degradation(outputs: dict) -> dict:
         score = 0.5
         comment = "report produced but external sources had results — degradation not fully tested"
 
-    return {"key": "graceful_degradation", "score": score, "comment": comment, "details": details}
+    return {"key": "graceful_degradation", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def keyword_recall(outputs: dict, reference_outputs: dict = None) -> dict:
@@ -482,7 +482,7 @@ def keyword_recall(outputs: dict, reference_outputs: dict = None) -> dict:
     keywords = (reference_outputs or {}).get("expected_root_cause_keywords", [])
 
     if not keywords:
-        return {"key": "keyword_recall", "score": 1.0, "comment": "no reference keywords", "details": []}
+        return {"key": "keyword_recall", "score": 1.0, "comment": "no reference keywords", "metadata": {"details": []}}
 
     details = []
     for kw in keywords:
@@ -499,7 +499,7 @@ def keyword_recall(outputs: dict, reference_outputs: dict = None) -> dict:
         f"{len(hits)}/{len(details)} keywords found"
         if hits else "no expected keywords found in root_cause"
     )
-    return {"key": "keyword_recall", "score": score, "comment": comment, "details": details}
+    return {"key": "keyword_recall", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 def _normalize_path(path: str) -> str:
@@ -513,7 +513,7 @@ def affected_file_recall(outputs: dict, reference_outputs: dict = None) -> dict:
     """Deterministic: fraction of expected files mentioned anywhere in the agent output."""
     expected = (reference_outputs or {}).get("expected_affected_files", [])
     if not expected:
-        return {"key": "affected_file_recall", "score": 1.0, "comment": "no reference files", "details": []}
+        return {"key": "affected_file_recall", "score": 1.0, "comment": "no reference files", "metadata": {"details": []}}
 
     # Collect files from mechanics.code_paths and bug_report.affected_components
     found_files: set[str] = set()
@@ -544,7 +544,7 @@ def affected_file_recall(outputs: dict, reference_outputs: dict = None) -> dict:
     hits = [d for d in details if d["passed"]]
     score = len(hits) / len(details)
     comment = f"{len(hits)}/{len(details)} expected files found"
-    return {"key": "affected_file_recall", "score": score, "comment": comment, "details": details}
+    return {"key": "affected_file_recall", "score": score, "comment": comment, "metadata": {"details": details}}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

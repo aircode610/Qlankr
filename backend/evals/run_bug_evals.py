@@ -45,6 +45,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "../../.env"))
 
 from langsmith import Client
 from langsmith.evaluation import aevaluate
+from models import BugCheckpointEvent, ErrorEvent
 
 # ── Deterministic evaluators ──────────────────────────────────────────────────
 from evals.bug_evaluators import (
@@ -109,7 +110,6 @@ async def bug_target(inputs: dict) -> dict:
       bug_report, tool_calls_used
     """
     from agent.bug_agent import run_bug_agent, continue_bug_agent, BugResultEvent
-    from models import CheckpointEvent, ErrorEvent
 
     description = inputs.get("description", "")
     environment = inputs.get("environment", "unspecified")
@@ -125,7 +125,7 @@ async def bug_target(inputs: dict) -> dict:
     async def _drain(generator):
         """Consume the event stream; return the first terminal event (result/checkpoint/error)."""
         async for event in generator:
-            if isinstance(event, (CheckpointEvent, BugResultEvent, ErrorEvent)):
+            if isinstance(event, (BugCheckpointEvent, BugResultEvent, ErrorEvent)):
                 return event
         return None
 
@@ -139,7 +139,7 @@ async def bug_target(inputs: dict) -> dict:
     ))
 
     # Auto-approve every checkpoint until we get a BugResultEvent
-    while isinstance(terminal, CheckpointEvent) and checkpoint_count < max_checkpoints:
+    while isinstance(terminal, BugCheckpointEvent) and checkpoint_count < max_checkpoints:
         checkpoint_count += 1
         terminal = await _drain(continue_bug_agent(
             session_id=terminal.session_id,
@@ -173,13 +173,23 @@ async def run_eval(
     dataset_name: str = _DEFAULT_DATASET,
     judges_enabled: bool = True,
     max_concurrency: int = 1,
+    target_name: str = "qlankr",
 ) -> None:
+    if target_name == "claude_code":
+        from evals.claude_code_target import claude_code_target_bug
+        target = claude_code_target_bug
+        experiment_prefix = "claude-code-bug-repro"
+        label = "Claude Code baseline"
+    else:
+        target = bug_target
+        label = "full (deterministic + judges)" if judges_enabled else "deterministic only"
+        experiment_prefix = "bug-repro-full" if judges_enabled else "bug-repro-det"
+
     evaluators = _ALL_EVALUATORS if judges_enabled else _DETERMINISTIC_EVALUATORS
-    label = "full (deterministic + judges)" if judges_enabled else "deterministic only"
-    experiment_prefix = "bug-repro-full" if judges_enabled else "bug-repro-det"
 
     print(f"\n{'='*60}")
     print(f"Bug reproduction eval — {label}")
+    print(f"Target:      {target_name}")
     print(f"Dataset:     {dataset_name}")
     print(f"Evaluators:  {len(evaluators)} ({len(_DETERMINISTIC_EVALUATORS)} det + "
           f"{len(_JUDGE_EVALUATORS) if judges_enabled else 0} judges)")
@@ -187,13 +197,14 @@ async def run_eval(
     print(f"{'='*60}")
 
     results = await aevaluate(
-        bug_target,
+        target,
         data=dataset_name,
         evaluators=evaluators,
         experiment_prefix=experiment_prefix,
         max_concurrency=max_concurrency,
         metadata={
             "pipeline": "bug_reproduction",
+            "target": target_name,
             "judges_enabled": judges_enabled,
         },
     )
@@ -244,6 +255,12 @@ def main() -> None:
         default=1,
         help="Max parallel pipeline runs (default: 1 — bug pipeline is expensive)",
     )
+    parser.add_argument(
+        "--target",
+        choices=["qlankr", "claude_code"],
+        default="qlankr",
+        help="System to evaluate: 'qlankr' (default) or 'claude_code' for Claude Code CLI baseline",
+    )
     args = parser.parse_args()
 
     # Verify the dataset exists
@@ -258,6 +275,7 @@ def main() -> None:
         dataset_name=args.dataset,
         judges_enabled=not args.no_judges,
         max_concurrency=args.concurrency,
+        target_name=args.target,
     ))
 
 

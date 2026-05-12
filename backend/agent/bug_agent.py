@@ -226,9 +226,10 @@ def _checkpoint_research_node(state: BugReproductionState) -> dict:
         "intermediate_result": {
             "sources_queried": findings.get("sources_queried", []),
             "sources_with_results": findings.get("sources_with_results", []),
-            "related_issues_count": len(findings.get("related_issues", [])),
-            "log_entries_count": len(findings.get("log_entries", [])),
-            "doc_references_count": len(findings.get("doc_references", [])),
+            "related_issues": findings.get("related_issues", []),
+            "log_entries": findings.get("log_entries", []),
+            "doc_references": findings.get("doc_references", []),
+            "network_traces": findings.get("network_traces", []),
         },
         "prompt": (
             "Research complete. Review the evidence summary.\n"

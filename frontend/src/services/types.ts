@@ -175,10 +175,11 @@ export interface DocReference {
 }
 
 export interface RelatedIssue {
-  key: string;
-  summary: string;
+  id: string;
+  title: string;
   status: string;
   url: string;
+  relevance?: string;
 }
 
 export interface ResearchFindings {
