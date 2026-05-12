@@ -19,6 +19,7 @@ import { BugTraceDrawer, BugStageInfo, BugStage } from '../components/BugTraceDr
 import { BugReportView } from '../components/BugReportView';
 import { BugCheckpointDialog } from '../components/BugCheckpointDialog';
 import { ResearchPanel } from '../components/ResearchPanel';
+import { Loader2 } from '@/lib/lucide-icons';
 import { createKnowledgeGraph } from '../core/graph/graph';
 import { indexRepo, analyzePR, continueAnalysis, getGraph, getProject, startBugReport, continueBugReport, type ProjectDetail } from '../services/api';
 import type { AnalysisStage, CheckpointData, AnalyzeResult, BugReport, BugCheckpointEvent } from '../services/types';
@@ -608,6 +609,22 @@ const AppContent = () => {
 
   // ── Landing / indexing screen ────────────────────────────────
   if (!showWorkspace) {
+    // If the project record says it's already indexed (or we're still
+    // fetching that record), show a loading state instead of flashing the
+    // "index this repo" UI while the graph is being fetched in the
+    // background by handleOpenCached.
+    const projectKnownReady = routeProject?.index_status === 'ready';
+    const projectStillLoading = !!routeProjectId && !routeProject;
+    if (projectKnownReady || projectStillLoading) {
+      return (
+        <div className="flex h-screen items-center justify-center bg-void">
+          <div className="flex items-center gap-3">
+            <Loader2 className="h-5 w-5 animate-spin text-accent" />
+            <span className="text-sm text-text-muted">Loading project…</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <IndexingPage
         onIndex={handleIndex}
