@@ -556,6 +556,7 @@ _judge = ChatAnthropic(
     temperature=0,
     max_tokens=512,
     api_key=os.environ.get("ANTHROPIC_API_KEY"),
+    base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
 )
 
 

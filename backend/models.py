@@ -363,6 +363,7 @@ class BugReportResultEvent(BaseModel):
     session_id: str
     report: BugReport
     agent_steps: int
+    full_state: dict | None = None
 
 
 class ExportReadyEvent(BaseModel):
