@@ -8,9 +8,8 @@ It connects to your GitHub repository, builds a live knowledge graph of your cod
 
 ## Demo
 
-<video src="docs/vids/QLANK1.mp4" controls width="600"></video>
-
-<video src="docs/vids/QLANK2.mp4" controls width="600"></video>
+- [QLANK1 demo](docs/vids/QLANK1.mp4)
+- [QLANK2 demo](docs/vids/QLANK2.mp4)
 
 ---
 
