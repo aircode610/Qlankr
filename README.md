@@ -6,6 +6,14 @@ It connects to your GitHub repository, builds a live knowledge graph of your cod
 
 ---
 
+## Demo
+
+<video src="docs/vids/QLANK1.mp4" controls width="600"></video>
+
+<video src="docs/vids/QLANK2.mp4" controls width="600"></video>
+
+---
+
 ## The Problem
 
 When a new PR lands, QA engineers often don't know what to test. There's no reliable way to quickly understand which components are affected, what risks are reintroduced, or whether the change is safe to ship. The default answer is "test everything" — which is slow — or "test what seems obvious" — which misses things.
